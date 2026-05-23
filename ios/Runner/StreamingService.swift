@@ -34,6 +34,12 @@ class StreamingService: NSObject {
             AVCaptureDevice.default(for: .audio)
         ) { _, _ in }
 
+        // Must be .offscreen for VideoEffect.execute() to be called
+        // Default is .passthrough which bypasses all VideoEffects entirely
+        var mixerSettings = stream.videoMixerSettings
+        mixerSettings.mode = .offscreen
+        stream.videoMixerSettings = mixerSettings
+
         stream.registerVideoEffect(scoreEffect)
 
         let preview = MTHKView(frame: .zero)

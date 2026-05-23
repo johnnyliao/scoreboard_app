@@ -1,122 +1,299 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 void main() {
-  runApp(const MyApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setPreferredOrientations([
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ]);
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  runApp(const ScoreboardApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class ScoreboardApp extends StatelessWidget {
+  const ScoreboardApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      title: 'Scoreboard',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData.dark(),
+      home: const ScoreboardPage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class ScoreboardPage extends StatefulWidget {
+  const ScoreboardPage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<ScoreboardPage> createState() => _ScoreboardPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _ScoreboardPageState extends State<ScoreboardPage> {
+  int _homeScore = 0;
+  int _awayScore = 0;
+  String _homeName = '主隊';
+  String _awayName = '客隊';
 
-  void _incrementCounter() {
+  void _editName(bool isHome) {
+    final controller = TextEditingController(
+      text: isHome ? _homeName : _awayName,
+    );
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isHome ? '主隊名稱' : '客隊名稱'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '輸入隊名'),
+          onSubmitted: (_) => _saveName(ctx, isHome, controller.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => _saveName(ctx, isHome, controller.text),
+            child: const Text('確定'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _saveName(BuildContext ctx, bool isHome, String value) {
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      if (isHome) {
+        _homeName = value.trim().isEmpty ? '主隊' : value.trim();
+      } else {
+        _awayName = value.trim().isEmpty ? '客隊' : value.trim();
+      }
     });
+    Navigator.pop(ctx);
+  }
+
+  void _reset() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('重置比分'),
+        content: const Text('確定要將比分歸零？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _homeScore = 0;
+                _awayScore = 0;
+              });
+              Navigator.pop(ctx);
+            },
+            child: const Text('重置', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+      backgroundColor: const Color(0xFF0A0E1A),
+      body: SafeArea(
+        child: Row(
+          children: [
+            Expanded(
+              child: _TeamPanel(
+                name: _homeName,
+                score: _homeScore,
+                accentColor: const Color(0xFF2196F3),
+                onAdd: () => setState(() => _homeScore++),
+                onSubtract: () => setState(() {
+                  if (_homeScore > 0) _homeScore--;
+                }),
+                onEditName: () => _editName(true),
+              ),
+            ),
+            _CenterPanel(onReset: _reset),
+            Expanded(
+              child: _TeamPanel(
+                name: _awayName,
+                score: _awayScore,
+                accentColor: const Color(0xFFE53935),
+                onAdd: () => setState(() => _awayScore++),
+                onSubtract: () => setState(() {
+                  if (_awayScore > 0) _awayScore--;
+                }),
+                onEditName: () => _editName(false),
+              ),
             ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+    );
+  }
+}
+
+class _TeamPanel extends StatelessWidget {
+  final String name;
+  final int score;
+  final Color accentColor;
+  final VoidCallback onAdd;
+  final VoidCallback onSubtract;
+  final VoidCallback onEditName;
+
+  const _TeamPanel({
+    required this.name,
+    required this.score,
+    required this.accentColor,
+    required this.onAdd,
+    required this.onSubtract,
+    required this.onEditName,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+      decoration: BoxDecoration(
+        color: accentColor.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: accentColor.withOpacity(0.25), width: 1.5),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          GestureDetector(
+            onTap: onEditName,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  name,
+                  style: TextStyle(
+                    color: accentColor,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Icon(Icons.edit, color: accentColor.withOpacity(0.5), size: 15),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$score',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 100,
+              fontWeight: FontWeight.w900,
+              height: 1.0,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _ScoreButton(
+                label: '−',
+                color: Colors.white24,
+                onPressed: onSubtract,
+              ),
+              const SizedBox(width: 24),
+              _ScoreButton(
+                label: '+',
+                color: accentColor,
+                onPressed: onAdd,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CenterPanel extends StatelessWidget {
+  final VoidCallback onReset;
+
+  const _CenterPanel({required this.onReset});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Text(
+          'VS',
+          style: TextStyle(
+            color: Colors.white38,
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 2,
+          ),
+        ),
+        const SizedBox(height: 24),
+        GestureDetector(
+          onTap: onReset,
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.refresh, color: Colors.white38, size: 26),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ScoreButton extends StatelessWidget {
+  final String label;
+  final Color color;
+  final VoidCallback onPressed;
+
+  const _ScoreButton({
+    required this.label,
+    required this.color,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: color.withOpacity(0.2),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          width: 56,
+          height: 56,
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: color == Colors.white24 ? Colors.white60 : color,
+              fontSize: 32,
+              fontWeight: FontWeight.w600,
+              height: 1,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

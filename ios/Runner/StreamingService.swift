@@ -42,6 +42,10 @@ class StreamingService: NSObject {
 
         stream.registerVideoEffect(scoreEffect)
 
+        // Start the Screen's display link and pixel buffer pool.
+        // Without this, offscreen mode never renders anything (black screen).
+        stream.screen.startRunning()
+
         let preview = MTHKView(frame: .zero)
         preview.videoGravity = .resizeAspectFill
         preview.attachStream(stream)

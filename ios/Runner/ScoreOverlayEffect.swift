@@ -6,7 +6,6 @@ import CoreImage
 class ScoreOverlayEffect: VideoEffect {
     private var cachedOverlay: CIImage?
     private let overlayLock = NSLock()
-    private let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
 
     func update(homeName: String, homeScore: Int, awayName: String, awayScore: Int, videoSize: CGSize) {
         let overlay = makeOverlay(
@@ -19,35 +18,32 @@ class ScoreOverlayEffect: VideoEffect {
         overlayLock.unlock()
     }
 
-    override func execute(_ buffer: CVPixelBuffer, info: CMSampleBuffer?) -> CVPixelBuffer {
+    // HaishinKit 1.9.x: VideoEffect.execute takes CIImage, returns CIImage
+    override func execute(_ image: CIImage, info: CMSampleBuffer?) -> CIImage {
         overlayLock.lock()
         let overlay = cachedOverlay
         overlayLock.unlock()
 
-        guard let overlay = overlay else { return buffer }
+        guard let overlay = overlay else { return image }
 
-        let ciImage = CIImage(cvPixelBuffer: buffer)
-        let bufferExtent = ciImage.extent
-
-        // Scale overlay to buffer dimensions if they differ
-        var finalOverlay = overlay
+        // Scale overlay to match frame size if needed
+        let frameExtent = image.extent
         let overlayExtent = overlay.extent
-        if abs(overlayExtent.width - bufferExtent.width) > 1 || abs(overlayExtent.height - bufferExtent.height) > 1 {
-            let sx = bufferExtent.width / overlayExtent.width
-            let sy = bufferExtent.height / overlayExtent.height
+        var finalOverlay = overlay
+        if abs(overlayExtent.width - frameExtent.width) > 1 || abs(overlayExtent.height - frameExtent.height) > 1 {
+            let sx = frameExtent.width / overlayExtent.width
+            let sy = frameExtent.height / overlayExtent.height
             finalOverlay = overlay.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
         }
 
-        let composited = finalOverlay.composited(over: ciImage)
-        ciContext.render(composited, to: buffer)
-        return buffer
+        return finalOverlay.composited(over: image)
     }
 
     private func makeOverlay(homeName: String, homeScore: Int, awayName: String, awayScore: Int, size: CGSize) -> CIImage? {
         let barH: CGFloat = 72
         let renderer = UIGraphicsImageRenderer(size: size)
         let uiImage = renderer.image { ctx in
-            // Semi-transparent black bar at bottom (UIKit coords: y=0 is top)
+            // Black bar at bottom (UIKit: y=0 is top, so bottom = size.height - barH)
             UIColor(red: 0, green: 0, blue: 0, alpha: 0.75).setFill()
             ctx.fill(CGRect(x: 0, y: size.height - barH, width: size.width, height: barH))
 
@@ -63,15 +59,7 @@ class ScoreOverlayEffect: VideoEffect {
                 y: size.height - barH + (barH - textSize.height) / 2
             ))
         }
-
-        guard let ciImage = CIImage(image: uiImage) else { return nil }
-
-        // CIImage origin is bottom-left; UIKit origin is top-left.
-        // Flip vertically so the bar stays at the bottom of the video frame.
-        let flipped = ciImage.transformed(
-            by: CGAffineTransform(scaleX: 1, y: -1)
-                .translatedBy(x: 0, y: -size.height)
-        )
-        return flipped
+        // CIImage(image:) maps UIKit bottom → CIImage y=0 (bottom), no flip needed
+        return CIImage(image: uiImage)
     }
 }

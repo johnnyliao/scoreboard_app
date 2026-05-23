@@ -40,4 +40,4 @@ jobs:
         with:
           name: iOS-IPA
           path: app.ipa
-          retention-days: 7
+          retention-days: 90

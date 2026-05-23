@@ -35,9 +35,19 @@ jobs:
           cp -rL build/ios/iphoneos/Runner.app Payload/
           zip -r -y app.ipa Payload
 
-      - name: Upload IPA
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: iOS-IPA
           path: app.ipa
           retention-days: 90
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" app.ipa \
+            --title "Build #${{ github.run_number }}" \
+            --notes "Commit: ${{ github.sha }}" \
+            --latest

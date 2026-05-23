@@ -54,6 +54,17 @@ import UIKit
                 self?.streamingService?.stopStream {
                     result(true)
                 }
+            case "updateScore":
+                guard let args = call.arguments as? [String: Any] else {
+                    result(nil); return
+                }
+                self?.streamingService?.updateScore(
+                    homeName: args["homeName"] as? String ?? "主隊",
+                    homeScore: args["homeScore"] as? Int ?? 0,
+                    awayName: args["awayName"] as? String ?? "客隊",
+                    awayScore: args["awayScore"] as? Int ?? 0
+                )
+                result(nil)
             default:
                 result(FlutterMethodNotImplemented)
             }

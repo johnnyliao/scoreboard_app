@@ -8,7 +8,6 @@ class StreamingService: NSObject {
     private var rtmpStream: RTMPStream?
     private(set) var previewView: UIView?
     private let scoreEffect = ScoreOverlayEffect()
-    private let videoSize = CGSize(width: 1280, height: 720)
 
     override init() {
         super.init()
@@ -19,7 +18,7 @@ class StreamingService: NSObject {
         let stream = RTMPStream(connection: rtmpConnection)
 
         var videoSettings = VideoCodecSettings()
-        videoSettings.videoSize = videoSize
+        videoSettings.videoSize = CGSize(width: 1280, height: 720)
         videoSettings.bitRate = 2_500_000
         stream.videoSettings = videoSettings
 
@@ -37,9 +36,6 @@ class StreamingService: NSObject {
 
         stream.registerVideoEffect(scoreEffect)
 
-        // Pre-warm overlay so the first frames already have a score bar
-        scoreEffect.update(homeName: "主隊", homeScore: 0, awayName: "客隊", awayScore: 0, videoSize: videoSize)
-
         let preview = MTHKView(frame: .zero)
         preview.videoGravity = .resizeAspectFill
         preview.attachStream(stream)
@@ -51,8 +47,7 @@ class StreamingService: NSObject {
     func updateScore(homeName: String, homeScore: Int, awayName: String, awayScore: Int) {
         scoreEffect.update(
             homeName: homeName, homeScore: homeScore,
-            awayName: awayName, awayScore: awayScore,
-            videoSize: videoSize
+            awayName: awayName, awayScore: awayScore
         )
     }
 

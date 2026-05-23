@@ -4,52 +4,77 @@ import UIKit
 import CoreImage
 
 class ScoreOverlayEffect: VideoEffect {
-    private var cachedOverlay: CIImage?
     private let overlayLock = NSLock()
+    private var cachedOverlay: CIImage?
+    private var cachedExtent = CGRect.zero
+    private var isDirty = true
 
-    func update(homeName: String, homeScore: Int, awayName: String, awayScore: Int, videoSize: CGSize) {
-        let overlay = makeOverlay(
-            homeName: homeName, homeScore: homeScore,
-            awayName: awayName, awayScore: awayScore,
-            size: videoSize
-        )
+    // Score state — write from main thread, read from capture queue
+    private var homeName: String = "主隊"
+    private var homeScore: Int = 0
+    private var awayName: String = "客隊"
+    private var awayScore: Int = 0
+
+    func update(homeName: String, homeScore: Int, awayName: String, awayScore: Int) {
         overlayLock.lock()
-        cachedOverlay = overlay
+        self.homeName = homeName
+        self.homeScore = homeScore
+        self.awayName = awayName
+        self.awayScore = awayScore
+        isDirty = true
         overlayLock.unlock()
     }
 
-    // HaishinKit 1.9.x: VideoEffect.execute takes CIImage, returns CIImage
+    // Called on HaishinKit capture queue — must be fast, no main-thread UIKit
     override func execute(_ image: CIImage, info: CMSampleBuffer?) -> CIImage {
+        let extent = image.extent
+
+        overlayLock.lock()
+        let needsRebuild = isDirty || extent != cachedExtent
+        let hName = homeName
+        let hScore = homeScore
+        let aName = awayName
+        let aScore = awayScore
+        overlayLock.unlock()
+
+        if needsRebuild {
+            // UIGraphicsImageRenderer is thread-safe since iOS 10
+            let overlay = makeOverlay(
+                homeName: hName, homeScore: hScore,
+                awayName: aName, awayScore: aScore,
+                size: extent.size
+            )
+            overlayLock.lock()
+            cachedOverlay = overlay
+            cachedExtent = extent
+            isDirty = false
+            overlayLock.unlock()
+        }
+
         overlayLock.lock()
         let overlay = cachedOverlay
         overlayLock.unlock()
 
-        guard let overlay = overlay else { return image }
-
-        // Scale overlay to match frame size if needed
-        let frameExtent = image.extent
-        let overlayExtent = overlay.extent
-        var finalOverlay = overlay
-        if abs(overlayExtent.width - frameExtent.width) > 1 || abs(overlayExtent.height - frameExtent.height) > 1 {
-            let sx = frameExtent.width / overlayExtent.width
-            let sy = frameExtent.height / overlayExtent.height
-            finalOverlay = overlay.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+        guard let overlay = overlay,
+              let filter = CIFilter(name: "CISourceOverCompositing") else {
+            return image
         }
-
-        return finalOverlay.composited(over: image)
+        filter.setValue(overlay, forKey: kCIInputImageKey)
+        filter.setValue(image, forKey: kCIInputBackgroundImageKey)
+        return filter.outputImage ?? image
     }
 
     private func makeOverlay(homeName: String, homeScore: Int, awayName: String, awayScore: Int, size: CGSize) -> CIImage? {
-        let barH: CGFloat = 72
+        let barH: CGFloat = size.height * 0.1  // 10% of frame height
+        let fontSize: CGFloat = barH * 0.55
         let renderer = UIGraphicsImageRenderer(size: size)
         let uiImage = renderer.image { ctx in
-            // Black bar at bottom (UIKit: y=0 is top, so bottom = size.height - barH)
             UIColor(red: 0, green: 0, blue: 0, alpha: 0.75).setFill()
             ctx.fill(CGRect(x: 0, y: size.height - barH, width: size.width, height: barH))
 
-            let text = "\(homeName)  \(homeScore) - \(awayScore)  \(awayName)"
+            let text = "\(homeName)  \(homeScore) – \(awayScore)  \(awayName)"
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.boldSystemFont(ofSize: 36),
+                .font: UIFont.boldSystemFont(ofSize: fontSize),
                 .foregroundColor: UIColor.white
             ]
             let attrStr = NSAttributedString(string: text, attributes: attrs)
@@ -59,7 +84,6 @@ class ScoreOverlayEffect: VideoEffect {
                 y: size.height - barH + (barH - textSize.height) / 2
             ))
         }
-        // CIImage(image:) maps UIKit bottom → CIImage y=0 (bottom), no flip needed
         return CIImage(image: uiImage)
     }
 }

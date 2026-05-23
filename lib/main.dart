@@ -41,7 +41,18 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   bool _isStreaming = false;
   bool _isLoading = false;
   bool _showCamera = false;
-  final _streamKeyController = TextEditingController();
+  final _streamKeyController = TextEditingController(text: 'uyrg-2yte-8rb9-36vr-a5v7');
+
+  void _syncScore() {
+    if (_isStreaming) {
+      _streamChannel.invokeMethod('updateScore', {
+        'homeName': _homeName,
+        'homeScore': _homeScore,
+        'awayName': _awayName,
+        'awayScore': _awayScore,
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -79,6 +90,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
           _isStreaming = true;
           _showCamera = true;
         });
+        _syncScore();
       } on PlatformException catch (e) {
         _showError(e.message ?? '串流失敗');
       } finally {
@@ -186,10 +198,8 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                           name: _homeName,
                           score: _homeScore,
                           accentColor: const Color(0xFF2196F3),
-                          onAdd: () => setState(() => _homeScore++),
-                          onSubtract: () => setState(() {
-                            if (_homeScore > 0) _homeScore--;
-                          }),
+                          onAdd: () { setState(() => _homeScore++); _syncScore(); },
+                          onSubtract: () { setState(() { if (_homeScore > 0) _homeScore--; }); _syncScore(); },
                           onEditName: () => _editName(true),
                           translucent: _showCamera,
                         ),
@@ -200,10 +210,8 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                           name: _awayName,
                           score: _awayScore,
                           accentColor: const Color(0xFFE53935),
-                          onAdd: () => setState(() => _awayScore++),
-                          onSubtract: () => setState(() {
-                            if (_awayScore > 0) _awayScore--;
-                          }),
+                          onAdd: () { setState(() => _awayScore++); _syncScore(); },
+                          onSubtract: () { setState(() { if (_awayScore > 0) _awayScore--; }); _syncScore(); },
                           onEditName: () => _editName(false),
                           translucent: _showCamera,
                         ),

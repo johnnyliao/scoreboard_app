@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+const _streamChannel = MethodChannel('com.scoreboard/streaming');
+const _rtmpUrl = 'rtmp://a.rtmp.youtube.com/live2';
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([
@@ -13,7 +16,6 @@ void main() {
 
 class ScoreboardApp extends StatelessWidget {
   const ScoreboardApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -27,7 +29,6 @@ class ScoreboardApp extends StatelessWidget {
 
 class ScoreboardPage extends StatefulWidget {
   const ScoreboardPage({super.key});
-
   @override
   State<ScoreboardPage> createState() => _ScoreboardPageState();
 }
@@ -37,28 +38,76 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   int _awayScore = 0;
   String _homeName = '主隊';
   String _awayName = '客隊';
+  bool _isStreaming = false;
+  bool _isLoading = false;
+  bool _showCamera = false;
+  final _streamKeyController = TextEditingController();
+
+  @override
+  void dispose() {
+    _streamKeyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggleStream() async {
+    if (_isStreaming) {
+      setState(() => _isLoading = true);
+      try {
+        await _streamChannel.invokeMethod('stopStream');
+        setState(() {
+          _isStreaming = false;
+          _showCamera = false;
+        });
+      } catch (e) {
+        _showError('停止失敗: $e');
+      } finally {
+        setState(() => _isLoading = false);
+      }
+    } else {
+      final key = _streamKeyController.text.trim();
+      if (key.isEmpty) {
+        _showError('請先輸入串流金鑰');
+        return;
+      }
+      setState(() => _isLoading = true);
+      try {
+        await _streamChannel.invokeMethod('startStream', {
+          'url': _rtmpUrl,
+          'key': key,
+        });
+        setState(() {
+          _isStreaming = true;
+          _showCamera = true;
+        });
+      } on PlatformException catch (e) {
+        _showError(e.message ?? '串流失敗');
+      } finally {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: Colors.red),
+    );
+  }
 
   void _editName(bool isHome) {
-    final controller = TextEditingController(
-      text: isHome ? _homeName : _awayName,
-    );
+    final ctrl = TextEditingController(text: isHome ? _homeName : _awayName);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(isHome ? '主隊名稱' : '客隊名稱'),
         content: TextField(
-          controller: controller,
+          controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(hintText: '輸入隊名'),
-          onSubmitted: (_) => _saveName(ctx, isHome, controller.text),
+          onSubmitted: (_) => _saveName(ctx, isHome, ctrl.text),
         ),
         actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => _saveName(ctx, isHome, controller.text),
+            onPressed: () => _saveName(ctx, isHome, ctrl.text),
             child: const Text('確定'),
           ),
         ],
@@ -84,10 +133,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
         title: const Text('重置比分'),
         content: const Text('確定要將比分歸零？'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
           TextButton(
             onPressed: () {
               setState(() {
@@ -107,36 +153,137 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0A0E1A),
-      body: SafeArea(
-        child: Row(
-          children: [
-            Expanded(
-              child: _TeamPanel(
-                name: _homeName,
-                score: _homeScore,
-                accentColor: const Color(0xFF2196F3),
-                onAdd: () => setState(() => _homeScore++),
-                onSubtract: () => setState(() {
-                  if (_homeScore > 0) _homeScore--;
-                }),
-                onEditName: () => _editName(true),
+      body: Stack(
+        children: [
+          // Camera preview (background when streaming)
+          if (_showCamera)
+            const UiKitView(
+              viewType: 'com.scoreboard/camera_preview',
+              creationParamsCodec: StandardMessageCodec(),
+            ),
+
+          // Dark overlay when not streaming
+          if (!_showCamera)
+            Container(color: const Color(0xFF0A0E1A)),
+
+          // Score overlay
+          SafeArea(
+            child: Column(
+              children: [
+                // Stream controls bar
+                _StreamBar(
+                  isStreaming: _isStreaming,
+                  isLoading: _isLoading,
+                  controller: _streamKeyController,
+                  onToggle: _toggleStream,
+                ),
+                // Score panel
+                Expanded(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _TeamPanel(
+                          name: _homeName,
+                          score: _homeScore,
+                          accentColor: const Color(0xFF2196F3),
+                          onAdd: () => setState(() => _homeScore++),
+                          onSubtract: () => setState(() {
+                            if (_homeScore > 0) _homeScore--;
+                          }),
+                          onEditName: () => _editName(true),
+                          translucent: _showCamera,
+                        ),
+                      ),
+                      _CenterPanel(onReset: _reset, isStreaming: _isStreaming),
+                      Expanded(
+                        child: _TeamPanel(
+                          name: _awayName,
+                          score: _awayScore,
+                          accentColor: const Color(0xFFE53935),
+                          onAdd: () => setState(() => _awayScore++),
+                          onSubtract: () => setState(() {
+                            if (_awayScore > 0) _awayScore--;
+                          }),
+                          onEditName: () => _editName(false),
+                          translucent: _showCamera,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StreamBar extends StatelessWidget {
+  final bool isStreaming;
+  final bool isLoading;
+  final TextEditingController controller;
+  final VoidCallback onToggle;
+
+  const _StreamBar({
+    required this.isStreaming,
+    required this.isLoading,
+    required this.controller,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      color: Colors.black54,
+      child: Row(
+        children: [
+          const Icon(Icons.vpn_key, color: Colors.white38, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              enabled: !isStreaming,
+              obscureText: true,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              decoration: InputDecoration(
+                hintText: '貼上 YouTube 串流金鑰',
+                hintStyle: const TextStyle(color: Colors.white30, fontSize: 13),
+                border: InputBorder.none,
+                isDense: true,
+                suffixIcon: isStreaming
+                    ? const Icon(Icons.lock, color: Colors.white30, size: 16)
+                    : null,
               ),
             ),
-            _CenterPanel(onReset: _reset),
-            Expanded(
-              child: _TeamPanel(
-                name: _awayName,
-                score: _awayScore,
-                accentColor: const Color(0xFFE53935),
-                onAdd: () => setState(() => _awayScore++),
-                onSubtract: () => setState(() {
-                  if (_awayScore > 0) _awayScore--;
-                }),
-                onEditName: () => _editName(false),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            height: 32,
+            child: ElevatedButton(
+              onPressed: isLoading ? null : onToggle,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isStreaming ? Colors.red : const Color(0xFF2196F3),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
               ),
+              child: isLoading
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Text(
+                      isStreaming ? '停止直播' : '開始直播',
+                      style: const TextStyle(fontSize: 13),
+                    ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -149,6 +296,7 @@ class _TeamPanel extends StatelessWidget {
   final VoidCallback onAdd;
   final VoidCallback onSubtract;
   final VoidCallback onEditName;
+  final bool translucent;
 
   const _TeamPanel({
     required this.name,
@@ -157,16 +305,19 @@ class _TeamPanel extends StatelessWidget {
     required this.onAdd,
     required this.onSubtract,
     required this.onEditName,
+    required this.translucent,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       decoration: BoxDecoration(
-        color: accentColor.withOpacity(0.08),
+        color: translucent
+            ? Colors.black.withOpacity(0.55)
+            : accentColor.withOpacity(0.08),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: accentColor.withOpacity(0.25), width: 1.5),
+        border: Border.all(color: accentColor.withOpacity(0.3), width: 1.5),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -186,8 +337,8 @@ class _TeamPanel extends StatelessWidget {
                     letterSpacing: 1.2,
                   ),
                 ),
-                const SizedBox(width: 6),
-                Icon(Icons.edit, color: accentColor.withOpacity(0.5), size: 15),
+                const SizedBox(width: 5),
+                Icon(Icons.edit, color: accentColor.withOpacity(0.5), size: 14),
               ],
             ),
           ),
@@ -196,26 +347,18 @@ class _TeamPanel extends StatelessWidget {
             '$score',
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 100,
+              fontSize: 88,
               fontWeight: FontWeight.w900,
               height: 1.0,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _ScoreButton(
-                label: '−',
-                color: Colors.white24,
-                onPressed: onSubtract,
-              ),
-              const SizedBox(width: 24),
-              _ScoreButton(
-                label: '+',
-                color: accentColor,
-                onPressed: onAdd,
-              ),
+              _ScoreButton(label: '−', color: Colors.white24, onPressed: onSubtract),
+              const SizedBox(width: 20),
+              _ScoreButton(label: '+', color: accentColor, onPressed: onAdd),
             ],
           ),
         ],
@@ -226,24 +369,43 @@ class _TeamPanel extends StatelessWidget {
 
 class _CenterPanel extends StatelessWidget {
   final VoidCallback onReset;
+  final bool isStreaming;
 
-  const _CenterPanel({required this.onReset});
+  const _CenterPanel({required this.onReset, required this.isStreaming});
 
   @override
   Widget build(BuildContext context) {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const Text(
-          'VS',
-          style: TextStyle(
-            color: Colors.white38,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 2,
+        if (isStreaming)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.red,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: const Text(
+              'LIVE',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+              ),
+            ),
+          )
+        else
+          const Text(
+            'VS',
+            style: TextStyle(
+              color: Colors.white38,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 2,
+            ),
           ),
-        ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 20),
         GestureDetector(
           onTap: onReset,
           child: Container(
@@ -252,7 +414,7 @@ class _CenterPanel extends StatelessWidget {
               color: Colors.white10,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.refresh, color: Colors.white38, size: 26),
+            child: const Icon(Icons.refresh, color: Colors.white38, size: 24),
           ),
         ),
       ],
@@ -275,19 +437,19 @@ class _ScoreButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: color.withOpacity(0.2),
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(12),
       child: InkWell(
         onTap: onPressed,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         child: Container(
-          width: 56,
-          height: 56,
+          width: 52,
+          height: 52,
           alignment: Alignment.center,
           child: Text(
             label,
             style: TextStyle(
               color: color == Colors.white24 ? Colors.white60 : color,
-              fontSize: 32,
+              fontSize: 30,
               fontWeight: FontWeight.w600,
               height: 1,
             ),

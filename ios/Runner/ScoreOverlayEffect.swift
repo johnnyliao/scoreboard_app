@@ -3,7 +3,7 @@ import HaishinKit
 import UIKit
 import CoreImage
 
-class ScoreOverlayEffect: NSObject, VideoEffect {
+class ScoreOverlayEffect: VideoEffect {
     private var cachedOverlay: CIImage?
     private let overlayLock = NSLock()
     private let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
@@ -19,7 +19,7 @@ class ScoreOverlayEffect: NSObject, VideoEffect {
         overlayLock.unlock()
     }
 
-    func execute(_ buffer: CVPixelBuffer, info: CMSampleBuffer?) -> CVPixelBuffer {
+    override func execute(_ buffer: CVPixelBuffer, info: CMSampleBuffer?) -> CVPixelBuffer {
         overlayLock.lock()
         let overlay = cachedOverlay
         overlayLock.unlock()

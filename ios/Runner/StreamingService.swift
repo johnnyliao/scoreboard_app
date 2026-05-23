@@ -34,17 +34,8 @@ class StreamingService: NSObject {
             AVCaptureDevice.default(for: .audio)
         ) { _, _ in }
 
-        // Must be .offscreen for VideoEffect.execute() to be called
-        // Default is .passthrough which bypasses all VideoEffects entirely
-        var mixerSettings = stream.videoMixerSettings
-        mixerSettings.mode = .offscreen
-        stream.videoMixerSettings = mixerSettings
-
+        // Register effect now; execution only happens once offscreen mode is active
         stream.registerVideoEffect(scoreEffect)
-
-        // Start the Screen's display link and pixel buffer pool.
-        // Without this, offscreen mode never renders anything (black screen).
-        stream.screen.startRunning()
 
         let preview = MTHKView(frame: .zero)
         preview.videoGravity = .resizeAspectFill
@@ -63,15 +54,25 @@ class StreamingService: NSObject {
 
     func startStream(url: String, key: String, completion: @escaping (Bool, String?) -> Void) {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] videoOk in
-            AVCaptureDevice.requestAccess(for: .audio) { audioOk in
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] audioOk in
+                guard let self = self else { return }
                 guard videoOk && audioOk else {
                     completion(false, "需要攝影機和麥克風權限")
                     return
                 }
                 DispatchQueue.main.async {
-                    self?.rtmpConnection.connect(url)
+                    // Switch to offscreen mode so VideoEffect.execute() is called,
+                    // then start the Screen's display link and pixel buffer pool.
+                    // Done here (not in init) so the stream is fully ready before
+                    // the display link fires its first tick.
+                    var mixerSettings = self.rtmpStream?.videoMixerSettings ?? IOVideoMixerSettings()
+                    mixerSettings.mode = .offscreen
+                    self.rtmpStream?.videoMixerSettings = mixerSettings
+                    self.rtmpStream?.screen.startRunning()
+
+                    self.rtmpConnection.connect(url)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        self?.rtmpStream?.publish(key)
+                        self.rtmpStream?.publish(key)
                         completion(true, nil)
                     }
                 }
@@ -82,6 +83,14 @@ class StreamingService: NSObject {
     func stopStream(completion: @escaping () -> Void) {
         rtmpStream?.close()
         rtmpConnection.close()
+
+        // Stop the offscreen rendering loop and revert to passthrough
+        // so the camera preview continues working without the overhead.
+        rtmpStream?.screen.stopRunning()
+        var mixerSettings = rtmpStream?.videoMixerSettings ?? IOVideoMixerSettings()
+        mixerSettings.mode = .passthrough
+        rtmpStream?.videoMixerSettings = mixerSettings
+
         completion()
     }
 }

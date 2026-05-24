@@ -169,9 +169,11 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
         children: [
           // Camera preview (background when streaming)
           if (_showCamera)
-            const UiKitView(
-              viewType: 'com.scoreboard/camera_preview',
-              creationParamsCodec: StandardMessageCodec(),
+            const Positioned.fill(
+              child: UiKitView(
+                viewType: 'com.scoreboard/camera_preview',
+                creationParamsCodec: StandardMessageCodec(),
+              ),
             ),
 
           // Dark overlay when not streaming

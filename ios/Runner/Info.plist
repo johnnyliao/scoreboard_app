@@ -53,9 +53,8 @@
 	<!-- ★ Google Sign-In: 請將下兩處 REPLACE_WITH_YOUR_CLIENT_ID 換成你的 iOS OAuth Client ID -->
 	<!-- 取得方式: Google Cloud Console → 憑證 → 建立 iOS OAuth 2.0 用戶端 ID (bundle: com.scoreboard.scoreboardapp) -->
 	<key>GIDClientID</key>
-	<string>REPLACE_WITH_YOUR_CLIENT_ID.apps.googleusercontent.com</string>
+	<string>78131088279-gs5a1kvq3fbc12o01om6leshn0tsmag1.apps.googleusercontent.com</string>
 
-	<!-- Reversed Client ID (格式: com.googleusercontent.apps.REPLACE_WITH_YOUR_CLIENT_ID) -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -63,7 +62,7 @@
 			<string>Editor</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.googleusercontent.apps.REPLACE_WITH_YOUR_CLIENT_ID</string>
+				<string>com.googleusercontent.apps.78131088279-gs5a1kvq3fbc12o01om6leshn0tsmag1</string>
 			</array>
 		</dict>
 	</array>

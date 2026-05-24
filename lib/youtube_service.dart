@@ -11,8 +11,9 @@ import 'package:http/http.dart' as http;
 //   4. 複製「iOS 用戶端 ID」貼在下方，並更新 Info.plist 的
 //      GIDClientID 與 CFBundleURLSchemes（reversed client ID）
 // ─────────────────────────────────────────────────────────────
+// iOS OAuth Client ID (Info.plist GIDClientID 使用同一組)
 const kGoogleIosClientId =
-    'REPLACE_WITH_YOUR_IOS_CLIENT_ID.apps.googleusercontent.com';
+    '78131088279-gs5a1kvq3fbc12o01om6leshn0tsmag1.apps.googleusercontent.com';
 
 const _youtubeScope = 'https://www.googleapis.com/auth/youtube';
 const _apiBase = 'https://www.googleapis.com/youtube/v3';

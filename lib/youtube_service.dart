@@ -32,7 +32,17 @@ class YouTubeService {
   static Future<void> signOut() => _gsi.signOut();
 
   static Future<String> _token() async {
-    final auth = await _gsi.currentUser!.authentication;
+    final user = _gsi.currentUser;
+    if (user == null) throw Exception('未登入');
+
+    // silentSignIn 還原的舊 session 可能沒帶 YouTube scope，補授權
+    final hasScope = await _gsi.canAccessScopes([_youtubeScope]);
+    if (!hasScope) {
+      final granted = await _gsi.requestScopes([_youtubeScope]);
+      if (!granted) throw Exception('需要 YouTube 管理權限，請重新授權');
+    }
+
+    final auth = await user.authentication;
     final token = auth.accessToken;
     if (token == null) throw Exception('無法取得 access token');
     return token;

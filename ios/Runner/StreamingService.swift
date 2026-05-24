@@ -128,7 +128,12 @@ class StreamingService: NSObject {
                               size: CGSize) -> CIImage? {
         let barH: CGFloat = size.height * 0.10
         let fontSize: CGFloat = barH * 0.55
-        let renderer = UIGraphicsImageRenderer(size: size)
+        // scale=1 → pixel-exact (no Retina 2x/3x inflation)
+        // opaque=false → transparent background so CISourceOverCompositing works correctly
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
         let uiImage = renderer.image { ctx in
             UIColor(red: 0, green: 0, blue: 0, alpha: 0.75).setFill()
             ctx.fill(CGRect(x: 0, y: size.height - barH, width: size.width, height: barH))
@@ -160,27 +165,27 @@ extension StreamingService: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
 
-        let w = CVPixelBufferGetWidth(pixelBuffer)
-        let h = CVPixelBufferGetHeight(pixelBuffer)
-        let cx = CGFloat(w) / 2
-        let cy = CGFloat(h) / 2
+        overlayLock.lock()
+        let overlay = cachedOverlay
+        overlayLock.unlock()
 
-        // DEBUG TEST: always draw a bright red circle in the center of every frame
-        // Using pure CoreImage (thread-safe, no UIKit needed)
-        if let gradient = CIFilter(name: "CIRadialGradient") {
-            gradient.setValue(CIVector(x: cx, y: cy), forKey: "inputCenter")
-            gradient.setValue(NSNumber(value: 90), forKey: "inputRadius0")
-            gradient.setValue(NSNumber(value: 100), forKey: "inputRadius1")
-            gradient.setValue(CIColor(red: 1, green: 0, blue: 0, alpha: 0.9), forKey: "inputColor0")
-            gradient.setValue(CIColor(red: 1, green: 0, blue: 0, alpha: 0), forKey: "inputColor1")
-            if let circle = gradient.outputImage?.cropped(to: CGRect(x: 0, y: 0, width: w, height: h)) {
-                let videoImage = CIImage(cvPixelBuffer: pixelBuffer)
-                if let composite = CIFilter(name: "CISourceOverCompositing") {
-                    composite.setValue(circle, forKey: kCIInputImageKey)
-                    composite.setValue(videoImage, forKey: kCIInputBackgroundImageKey)
-                    if let output = composite.outputImage {
-                        ciContext.render(output, to: pixelBuffer)
-                    }
+        if let overlay = overlay {
+            let frameW = CVPixelBufferGetWidth(pixelBuffer)
+            let frameH = CVPixelBufferGetHeight(pixelBuffer)
+            let frameBounds = CGRect(x: 0, y: 0, width: frameW, height: frameH)
+
+            let videoImage = CIImage(cvPixelBuffer: pixelBuffer)
+
+            // Overlay was built at exact pixel size (scale=1), crop to frame bounds to be safe
+            let clippedOverlay = overlay.cropped(to: frameBounds)
+
+            if let filter = CIFilter(name: "CISourceOverCompositing") {
+                filter.setValue(clippedOverlay, forKey: kCIInputImageKey)
+                filter.setValue(videoImage, forKey: kCIInputBackgroundImageKey)
+                if let composited = filter.outputImage {
+                    ciContext.render(composited, to: pixelBuffer,
+                                     bounds: frameBounds,
+                                     colorSpace: CGColorSpaceCreateDeviceRGB())
                 }
             }
         }

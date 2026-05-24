@@ -156,7 +156,7 @@ extension StreamingService: AVCaptureVideoDataOutputSampleBufferDelegate {
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         guard let pixelBuffer = sampleBuffer.imageBuffer else {
-            rtmpStream?.append(sampleBuffer, track: 0)
+            rtmpStream?.append(sampleBuffer)
             return
         }
 
@@ -190,7 +190,7 @@ extension StreamingService: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
         }
 
-        // Feed modified frame to HaishinKit (passthrough → encoder + preview)
-        rtmpStream?.append(sampleBuffer, track: 0)
+        // Feed modified video frame to HaishinKit
+        rtmpStream?.append(sampleBuffer)
     }
 }

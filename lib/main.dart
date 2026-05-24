@@ -136,6 +136,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       }
     });
     Navigator.pop(ctx);
+    _syncScore();
   }
 
   void _reset() {
@@ -153,6 +154,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                 _awayScore = 0;
               });
               Navigator.pop(ctx);
+              _syncScore();
             },
             child: const Text('重置', style: TextStyle(color: Colors.red)),
           ),

@@ -35,14 +35,13 @@ class YouTubeService {
     final user = _gsi.currentUser;
     if (user == null) throw Exception('未登入');
 
-    // silentSignIn 還原的舊 session 可能沒帶 YouTube scope，補授權
-    final hasScope = await _gsi.canAccessScopes([_youtubeScope]);
-    if (!hasScope) {
-      final granted = await _gsi.requestScopes([_youtubeScope]);
-      if (!granted) throw Exception('需要 YouTube 管理權限，請重新授權');
-    }
+    // iOS 上 canAccessScopes 不可靠；直接呼叫 requestScopes
+    // 已授權時不會彈視窗，尚未授權時才會跳出 Google 同意畫面
+    final granted = await _gsi.requestScopes([_youtubeScope]);
+    if (!granted) throw Exception('需要 YouTube 管理權限，請在 Google 同意畫面按「允許」');
 
-    final auth = await user.authentication;
+    // requestScopes 後重新取 authentication，確保 token 包含新 scope
+    final auth = await _gsi.currentUser!.authentication;
     final token = auth.accessToken;
     if (token == null) throw Exception('無法取得 access token');
     return token;

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:share_plus/share_plus.dart';
+import 'youtube_service.dart';
 
 const _streamChannel = MethodChannel('com.scoreboard/streaming');
-const _rtmpUrl = 'rtmp://a.rtmp.youtube.com/live2';
+const _rtmpBase = 'rtmp://a.rtmp.youtube.com/live2';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,10 +41,40 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   int _awayScore = 0;
   String _homeName = '主隊';
   String _awayName = '客隊';
+
   bool _isStreaming = false;
   bool _isLoading = false;
   bool _showCamera = false;
-  final _streamKeyController = TextEditingController(text: 'uyrg-2yte-8rb9-36vr-a5v7');
+
+  GoogleSignInAccount? _account;
+  String? _watchUrl;
+  String? _broadcastId;
+
+  late final TextEditingController _titleCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _titleCtrl = TextEditingController(
+      text:
+          'Live Scoreboard ${now.year}/${now.month.toString().padLeft(2, '0')}/${now.day.toString().padLeft(2, '0')}',
+    );
+    _tryRestoreSignIn();
+  }
+
+  Future<void> _tryRestoreSignIn() async {
+    final account = await YouTubeService.signInSilently();
+    if (mounted && account != null) setState(() => _account = account);
+  }
+
+  @override
+  void dispose() {
+    _titleCtrl.dispose();
+    super.dispose();
+  }
+
+  // ── Score sync ─────────────────────────────────────────────
 
   void _syncScore() {
     if (_isStreaming) {
@@ -54,59 +87,87 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
     }
   }
 
-  @override
-  void dispose() {
-    _streamKeyController.dispose();
-    super.dispose();
-  }
+  // ── Sign in / out ──────────────────────────────────────────
 
-  Future<void> _toggleStream() async {
-    if (_isStreaming) {
-      setState(() => _isLoading = true);
-      try {
-        await _streamChannel.invokeMethod('stopStream');
-        setState(() {
-          _isStreaming = false;
-          _showCamera = false;
-        });
-      } catch (e) {
-        _showError('停止失敗: $e');
-      } finally {
-        setState(() => _isLoading = false);
-      }
-    } else {
-      final key = _streamKeyController.text.trim();
-      if (key.isEmpty) {
-        _showError('請先輸入串流金鑰');
-        return;
-      }
-      setState(() => _isLoading = true);
-      try {
-        await _streamChannel.invokeMethod('startStream', {
-          'url': _rtmpUrl,
-          'key': key,
-        });
-        setState(() {
-          _isStreaming = true;
-          _showCamera = true;
-        });
-        _syncScore();
-      } on PlatformException catch (e) {
-        _showError(e.message ?? '串流失敗');
-      } finally {
-        setState(() => _isLoading = false);
-      }
+  Future<void> _signIn() async {
+    try {
+      final account = await YouTubeService.signIn();
+      if (mounted && account != null) setState(() => _account = account);
+    } catch (e) {
+      _showError('登入失敗: $e');
     }
   }
 
+  Future<void> _signOut() async {
+    await YouTubeService.signOut();
+    if (mounted) setState(() => _account = null);
+  }
+
+  // ── Start / Stop stream ────────────────────────────────────
+
+  Future<void> _startStream() async {
+    final title = _titleCtrl.text.trim();
+    if (title.isEmpty) {
+      _showError('請輸入直播標題');
+      return;
+    }
+    setState(() => _isLoading = true);
+    try {
+      final live = await YouTubeService.setupLive(title: title);
+
+      await _streamChannel.invokeMethod('startStream', {
+        'url': live.rtmpUrl,
+        'key': live.streamKey,
+      });
+
+      setState(() {
+        _isStreaming = true;
+        _showCamera = true;
+        _watchUrl = live.watchUrl;
+        _broadcastId = live.broadcastId;
+      });
+      _syncScore();
+    } on PlatformException catch (e) {
+      _showError(e.message ?? '推流失敗');
+    } catch (e) {
+      _showError('$e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _stopStream() async {
+    setState(() => _isLoading = true);
+    try {
+      await _streamChannel.invokeMethod('stopStream');
+      if (_broadcastId != null) {
+        await YouTubeService.stopBroadcast(_broadcastId!);
+      }
+      setState(() {
+        _isStreaming = false;
+        _showCamera = false;
+        _watchUrl = null;
+        _broadcastId = null;
+      });
+    } catch (e) {
+      _showError('停止失敗: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  // ── UI helpers ─────────────────────────────────────────────
+
   void _showError(String msg) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), backgroundColor: Colors.red),
     );
   }
 
   void _editName(bool isHome) {
-    final ctrl = TextEditingController(text: isHome ? _homeName : _awayName);
+    final ctrl =
+        TextEditingController(text: isHome ? _homeName : _awayName);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -117,7 +178,9 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
           onSubmitted: (_) => _saveName(ctx, isHome, ctrl.text),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消')),
           TextButton(
             onPressed: () => _saveName(ctx, isHome, ctrl.text),
             child: const Text('確定'),
@@ -146,7 +209,9 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
         title: const Text('重置比分'),
         content: const Text('確定要將比分歸零？'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消')),
           TextButton(
             onPressed: () {
               setState(() {
@@ -156,12 +221,15 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
               Navigator.pop(ctx);
               _syncScore();
             },
-            child: const Text('重置', style: TextStyle(color: Colors.red)),
+            child: const Text('重置',
+                style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
     );
   }
+
+  // ── Build ──────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -169,7 +237,6 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       backgroundColor: const Color(0xFF0A0E1A),
       body: Stack(
         children: [
-          // Camera preview (background when streaming)
           if (_showCamera)
             const Positioned.fill(
               child: UiKitView(
@@ -177,23 +244,23 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                 creationParamsCodec: StandardMessageCodec(),
               ),
             ),
-
-          // Dark overlay when not streaming
-          if (!_showCamera)
-            Container(color: const Color(0xFF0A0E1A)),
-
-          // Score overlay
+          if (!_showCamera) Container(color: const Color(0xFF0A0E1A)),
           SafeArea(
             child: Column(
               children: [
-                // Stream controls bar
-                _StreamBar(
+                _TopBar(
+                  account: _account,
                   isStreaming: _isStreaming,
                   isLoading: _isLoading,
-                  controller: _streamKeyController,
-                  onToggle: _toggleStream,
+                  titleCtrl: _titleCtrl,
+                  watchUrl: _watchUrl,
+                  onSignIn: _signIn,
+                  onSignOut: _signOut,
+                  onStart: _account != null && !_isStreaming
+                      ? _startStream
+                      : null,
+                  onStop: _isStreaming ? _stopStream : null,
                 ),
-                // Score panel
                 Expanded(
                   child: Row(
                     children: [
@@ -202,20 +269,38 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                           name: _homeName,
                           score: _homeScore,
                           accentColor: const Color(0xFF2196F3),
-                          onAdd: () { setState(() => _homeScore++); _syncScore(); },
-                          onSubtract: () { setState(() { if (_homeScore > 0) _homeScore--; }); _syncScore(); },
+                          onAdd: () {
+                            setState(() => _homeScore++);
+                            _syncScore();
+                          },
+                          onSubtract: () {
+                            setState(() {
+                              if (_homeScore > 0) _homeScore--;
+                            });
+                            _syncScore();
+                          },
                           onEditName: () => _editName(true),
                           translucent: _showCamera,
                         ),
                       ),
-                      _CenterPanel(onReset: _reset, isStreaming: _isStreaming),
+                      _CenterPanel(
+                          onReset: _reset,
+                          isStreaming: _isStreaming),
                       Expanded(
                         child: _TeamPanel(
                           name: _awayName,
                           score: _awayScore,
                           accentColor: const Color(0xFFE53935),
-                          onAdd: () { setState(() => _awayScore++); _syncScore(); },
-                          onSubtract: () { setState(() { if (_awayScore > 0) _awayScore--; }); _syncScore(); },
+                          onAdd: () {
+                            setState(() => _awayScore++);
+                            _syncScore();
+                          },
+                          onSubtract: () {
+                            setState(() {
+                              if (_awayScore > 0) _awayScore--;
+                            });
+                            _syncScore();
+                          },
                           onEditName: () => _editName(false),
                           translucent: _showCamera,
                         ),
@@ -232,17 +317,29 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   }
 }
 
-class _StreamBar extends StatelessWidget {
+// ── Top Bar ─────────────────────────────────────────────────
+
+class _TopBar extends StatelessWidget {
+  final GoogleSignInAccount? account;
   final bool isStreaming;
   final bool isLoading;
-  final TextEditingController controller;
-  final VoidCallback onToggle;
+  final TextEditingController titleCtrl;
+  final String? watchUrl;
+  final VoidCallback onSignIn;
+  final VoidCallback onSignOut;
+  final VoidCallback? onStart;
+  final VoidCallback? onStop;
 
-  const _StreamBar({
+  const _TopBar({
+    required this.account,
     required this.isStreaming,
     required this.isLoading,
-    required this.controller,
-    required this.onToggle,
+    required this.titleCtrl,
+    required this.watchUrl,
+    required this.onSignIn,
+    required this.onSignOut,
+    required this.onStart,
+    required this.onStop,
   });
 
   @override
@@ -252,54 +349,195 @@ class _StreamBar extends StatelessWidget {
       color: Colors.black54,
       child: Row(
         children: [
-          const Icon(Icons.vpn_key, color: Colors.white38, size: 18),
-          const SizedBox(width: 8),
+          // ── Left: sign-in state ──
+          if (account == null)
+            _btn(
+              label: '登入 YouTube',
+              icon: Icons.login,
+              color: const Color(0xFFFF0000),
+              onTap: isLoading ? null : onSignIn,
+            )
+          else if (!isStreaming)
+            _accountChip(context, account!)
+          else
+            _liveBadge(),
+
+          const SizedBox(width: 10),
+
+          // ── Center: title / watch URL ──
           Expanded(
-            child: TextField(
-              controller: controller,
-              enabled: !isStreaming,
-              obscureText: true,
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-              decoration: InputDecoration(
-                hintText: '貼上 YouTube 串流金鑰',
-                hintStyle: const TextStyle(color: Colors.white30, fontSize: 13),
-                border: InputBorder.none,
-                isDense: true,
-                suffixIcon: isStreaming
-                    ? const Icon(Icons.lock, color: Colors.white30, size: 16)
-                    : null,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            height: 32,
-            child: ElevatedButton(
-              onPressed: isLoading ? null : onToggle,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: isStreaming ? Colors.red : const Color(0xFF2196F3),
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-              ),
-              child: isLoading
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
+            child: isStreaming && watchUrl != null
+                ? GestureDetector(
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(text: watchUrl!));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('連結已複製'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    child: Text(
+                      watchUrl!,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        decoration: TextDecoration.underline,
                       ),
-                    )
-                  : Text(
-                      isStreaming ? '停止直播' : '開始直播',
-                      style: const TextStyle(fontSize: 13),
+                      overflow: TextOverflow.ellipsis,
                     ),
+                  )
+                : TextField(
+                    controller: titleCtrl,
+                    enabled: !isStreaming && account != null,
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 13),
+                    decoration: const InputDecoration(
+                      hintText: '直播標題',
+                      hintStyle: TextStyle(
+                          color: Colors.white30, fontSize: 13),
+                      border: InputBorder.none,
+                      isDense: true,
+                      prefixIcon: Icon(Icons.title,
+                          color: Colors.white30, size: 16),
+                    ),
+                  ),
+          ),
+
+          const SizedBox(width: 8),
+
+          // ── Right: action buttons ──
+          if (isLoading)
+            const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white),
+            )
+          else if (isStreaming) ...[
+            if (watchUrl != null)
+              IconButton(
+                icon: const Icon(Icons.share,
+                    color: Colors.white70, size: 20),
+                onPressed: () =>
+                    SharePlus.instance.share(ShareParams(text: watchUrl!)),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            const SizedBox(width: 8),
+            _btn(
+              label: '停止直播',
+              icon: Icons.stop_circle_outlined,
+              color: Colors.red,
+              onTap: onStop,
             ),
+          ] else if (account != null)
+            _btn(
+              label: '開始直播',
+              icon: Icons.live_tv,
+              color: const Color(0xFF2196F3),
+              onTap: onStart,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _liveBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.red,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: const Text(
+        '● LIVE',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1,
+        ),
+      ),
+    );
+  }
+
+  Widget _accountChip(BuildContext context, GoogleSignInAccount account) {
+    return GestureDetector(
+      onTap: () => _showSignOutMenu(context),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircleAvatar(
+            radius: 12,
+            backgroundImage: account.photoUrl != null
+                ? NetworkImage(account.photoUrl!)
+                : null,
+            child: account.photoUrl == null
+                ? Text(
+                    account.displayName?.substring(0, 1).toUpperCase() ?? 'Y',
+                    style: const TextStyle(fontSize: 11),
+                  )
+                : null,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            account.displayName ?? account.email,
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
     );
   }
+
+  void _showSignOutMenu(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('帳號'),
+        content:
+            Text(account?.email ?? ''),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              onSignOut();
+            },
+            child: const Text('登出',
+                style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _btn({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback? onTap,
+  }) {
+    return SizedBox(
+      height: 32,
+      child: ElevatedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 15),
+        label: Text(label, style: const TextStyle(fontSize: 12)),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+        ),
+      ),
+    );
+  }
 }
+
+// ── Team Panel ───────────────────────────────────────────────
 
 class _TeamPanel extends StatelessWidget {
   final String name;
@@ -329,7 +567,8 @@ class _TeamPanel extends StatelessWidget {
             ? Colors.black.withOpacity(0.55)
             : accentColor.withOpacity(0.08),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: accentColor.withOpacity(0.3), width: 1.5),
+        border:
+            Border.all(color: accentColor.withOpacity(0.3), width: 1.5),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -350,7 +589,8 @@ class _TeamPanel extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 5),
-                Icon(Icons.edit, color: accentColor.withOpacity(0.5), size: 14),
+                Icon(Icons.edit,
+                    color: accentColor.withOpacity(0.5), size: 14),
               ],
             ),
           ),
@@ -368,9 +608,15 @@ class _TeamPanel extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _ScoreButton(label: '−', color: Colors.white24, onPressed: onSubtract),
+              _ScoreButton(
+                  label: '−',
+                  color: Colors.white24,
+                  onPressed: onSubtract),
               const SizedBox(width: 20),
-              _ScoreButton(label: '+', color: accentColor, onPressed: onAdd),
+              _ScoreButton(
+                  label: '+',
+                  color: accentColor,
+                  onPressed: onAdd),
             ],
           ),
         ],
@@ -379,11 +625,14 @@ class _TeamPanel extends StatelessWidget {
   }
 }
 
+// ── Center Panel ─────────────────────────────────────────────
+
 class _CenterPanel extends StatelessWidget {
   final VoidCallback onReset;
   final bool isStreaming;
 
-  const _CenterPanel({required this.onReset, required this.isStreaming});
+  const _CenterPanel(
+      {required this.onReset, required this.isStreaming});
 
   @override
   Widget build(BuildContext context) {
@@ -392,7 +641,8 @@ class _CenterPanel extends StatelessWidget {
       children: [
         if (isStreaming)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
             decoration: BoxDecoration(
               color: Colors.red,
               borderRadius: BorderRadius.circular(4),
@@ -426,13 +676,16 @@ class _CenterPanel extends StatelessWidget {
               color: Colors.white10,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.refresh, color: Colors.white38, size: 24),
+            child: const Icon(Icons.refresh,
+                color: Colors.white38, size: 24),
           ),
         ),
       ],
     );
   }
 }
+
+// ── Score Button ─────────────────────────────────────────────
 
 class _ScoreButton extends StatelessWidget {
   final String label;

@@ -160,37 +160,31 @@ extension StreamingService: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
 
-        // Read cached overlay and size together under the lock
-        overlayLock.lock()
-        let overlay = cachedOverlay
-        let currentOverlaySize = overlaySize
-        overlayLock.unlock()
+        let w = CVPixelBufferGetWidth(pixelBuffer)
+        let h = CVPixelBufferGetHeight(pixelBuffer)
+        let cx = CGFloat(w) / 2
+        let cy = CGFloat(h) / 2
 
-        if let overlay = overlay {
-            let videoImage = CIImage(cvPixelBuffer: pixelBuffer)
-
-            var finalOverlay = overlay
-            let frameSize = CGSize(width: CVPixelBufferGetWidth(pixelBuffer),
-                                   height: CVPixelBufferGetHeight(pixelBuffer))
-            if currentOverlaySize.width > 0, currentOverlaySize.height > 0,
-               abs(currentOverlaySize.width - frameSize.width) > 1 ||
-               abs(currentOverlaySize.height - frameSize.height) > 1 {
-                let sx = frameSize.width / currentOverlaySize.width
-                let sy = frameSize.height / currentOverlaySize.height
-                finalOverlay = overlay.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
-            }
-
-            // Composite and render back into the same pixel buffer
-            if let filter = CIFilter(name: "CISourceOverCompositing") {
-                filter.setValue(finalOverlay, forKey: kCIInputImageKey)
-                filter.setValue(videoImage, forKey: kCIInputBackgroundImageKey)
-                if let composited = filter.outputImage {
-                    ciContext.render(composited, to: pixelBuffer)
+        // DEBUG TEST: always draw a bright red circle in the center of every frame
+        // Using pure CoreImage (thread-safe, no UIKit needed)
+        if let gradient = CIFilter(name: "CIRadialGradient") {
+            gradient.setValue(CIVector(x: cx, y: cy), forKey: "inputCenter")
+            gradient.setValue(NSNumber(value: 90), forKey: "inputRadius0")
+            gradient.setValue(NSNumber(value: 100), forKey: "inputRadius1")
+            gradient.setValue(CIColor(red: 1, green: 0, blue: 0, alpha: 0.9), forKey: "inputColor0")
+            gradient.setValue(CIColor(red: 1, green: 0, blue: 0, alpha: 0), forKey: "inputColor1")
+            if let circle = gradient.outputImage?.cropped(to: CGRect(x: 0, y: 0, width: w, height: h)) {
+                let videoImage = CIImage(cvPixelBuffer: pixelBuffer)
+                if let composite = CIFilter(name: "CISourceOverCompositing") {
+                    composite.setValue(circle, forKey: kCIInputImageKey)
+                    composite.setValue(videoImage, forKey: kCIInputBackgroundImageKey)
+                    if let output = composite.outputImage {
+                        ciContext.render(output, to: pixelBuffer)
+                    }
                 }
             }
         }
 
-        // Feed modified video frame to HaishinKit
         rtmpStream?.append(sampleBuffer)
     }
 }

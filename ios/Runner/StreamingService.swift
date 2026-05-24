@@ -185,9 +185,7 @@ extension StreamingService: AVCaptureVideoDataOutputSampleBufferDelegate {
                 filter.setValue(finalOverlay, forKey: kCIInputImageKey)
                 filter.setValue(videoImage, forKey: kCIInputBackgroundImageKey)
                 if let composited = filter.outputImage {
-                    CVPixelBufferLockBaseAddress(pixelBuffer, [])
                     ciContext.render(composited, to: pixelBuffer)
-                    CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
                 }
             }
         }

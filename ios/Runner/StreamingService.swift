@@ -126,31 +126,49 @@ class StreamingService: NSObject {
     private func makeOverlay(homeName: String, homeScore: Int,
                               awayName: String, awayScore: Int,
                               size: CGSize) -> CIImage? {
-        let barH: CGFloat = size.height * 0.10
-        let fontSize: CGFloat = barH * 0.55
-        // scale=1 → pixel-exact (no Retina 2x/3x inflation)
-        // opaque=false → transparent background so CISourceOverCompositing works correctly
+        let padding: CGFloat = 14
+        let lineGap: CGFloat = 6
+        let cornerRadius: CGFloat = 10
+        let offsetX: CGFloat = 20
+        let offsetY: CGFloat = 20
+
+        let nameFont = UIFont.systemFont(ofSize: 30, weight: .medium)
+        let scoreFont = UIFont.monospacedDigitSystemFont(ofSize: 30, weight: .bold)
+
+        let line1 = scoreLine(name: homeName, score: homeScore, nameFont: nameFont, scoreFont: scoreFont)
+        let line2 = scoreLine(name: awayName, score: awayScore, nameFont: nameFont, scoreFont: scoreFont)
+        let sz1 = line1.size()
+        let sz2 = line2.size()
+
+        let boxW = max(sz1.width, sz2.width) + padding * 2
+        let boxH = sz1.height + lineGap + sz2.height + padding * 2
+        let boxRect = CGRect(x: offsetX, y: offsetY, width: boxW, height: boxH)
+
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         format.opaque = false
         let renderer = UIGraphicsImageRenderer(size: size, format: format)
-        let uiImage = renderer.image { ctx in
-            UIColor(red: 0, green: 0, blue: 0, alpha: 0.75).setFill()
-            ctx.fill(CGRect(x: 0, y: size.height - barH, width: size.width, height: barH))
+        let uiImage = renderer.image { _ in
+            UIColor(red: 0, green: 0, blue: 0, alpha: 0.72).setFill()
+            UIBezierPath(roundedRect: boxRect, cornerRadius: cornerRadius).fill()
 
-            let text = "\(homeName)  \(homeScore) – \(awayScore)  \(awayName)"
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.boldSystemFont(ofSize: fontSize),
-                .foregroundColor: UIColor.white
-            ]
-            let str = NSAttributedString(string: text, attributes: attrs)
-            let sz = str.size()
-            str.draw(at: CGPoint(
-                x: (size.width - sz.width) / 2,
-                y: size.height - barH + (barH - sz.height) / 2
-            ))
+            line1.draw(at: CGPoint(x: offsetX + padding, y: offsetY + padding))
+            line2.draw(at: CGPoint(x: offsetX + padding,
+                                   y: offsetY + padding + sz1.height + lineGap))
         }
         return CIImage(image: uiImage)
+    }
+
+    private func scoreLine(name: String, score: Int,
+                            nameFont: UIFont, scoreFont: UIFont) -> NSAttributedString {
+        let s = NSMutableAttributedString()
+        s.append(NSAttributedString(
+            string: "\(name)  ",
+            attributes: [.font: nameFont, .foregroundColor: UIColor(white: 0.85, alpha: 1)]))
+        s.append(NSAttributedString(
+            string: "\(score)",
+            attributes: [.font: scoreFont, .foregroundColor: UIColor.white]))
+        return s
     }
 }
 

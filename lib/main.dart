@@ -419,8 +419,7 @@ class _TopBar extends StatelessWidget {
               IconButton(
                 icon: const Icon(Icons.share,
                     color: Colors.white70, size: 20),
-                onPressed: () =>
-                    SharePlus.instance.share(ShareParams(text: watchUrl!)),
+                onPressed: () => Share.share(watchUrl!),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
               ),

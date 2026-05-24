@@ -160,21 +160,23 @@ extension StreamingService: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
 
-        // Read cached overlay (built on main thread)
+        // Read cached overlay and size together under the lock
         overlayLock.lock()
         let overlay = cachedOverlay
+        let currentOverlaySize = overlaySize
         overlayLock.unlock()
 
         if let overlay = overlay {
             let videoImage = CIImage(cvPixelBuffer: pixelBuffer)
 
-            // Scale overlay if frame size differs from overlay size
             var finalOverlay = overlay
             let frameSize = CGSize(width: CVPixelBufferGetWidth(pixelBuffer),
                                    height: CVPixelBufferGetHeight(pixelBuffer))
-            if abs(overlaySize.width - frameSize.width) > 1 || abs(overlaySize.height - frameSize.height) > 1 {
-                let sx = frameSize.width / overlaySize.width
-                let sy = frameSize.height / overlaySize.height
+            if currentOverlaySize.width > 0, currentOverlaySize.height > 0,
+               abs(currentOverlaySize.width - frameSize.width) > 1 ||
+               abs(currentOverlaySize.height - frameSize.height) > 1 {
+                let sx = frameSize.width / currentOverlaySize.width
+                let sy = frameSize.height / currentOverlaySize.height
                 finalOverlay = overlay.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
             }
 

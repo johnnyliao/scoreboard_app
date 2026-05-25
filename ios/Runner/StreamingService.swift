@@ -239,6 +239,16 @@ class StreamingService: NSObject {
             ctx.fill(CGRect(x: 0, y: 0, width: W, height: H))
         }
 
+        // ── Border glow pulse (0–2 s, 3 pulses) ──────────────
+        if elapsed < 2.0 {
+            let pulsePeriod: CGFloat = 2.0 / 3.0
+            let t = elapsed.truncatingRemainder(dividingBy: pulsePeriod) / pulsePeriod
+            let pulseAlpha = sin(t * .pi) * 0.85
+            ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: pulseAlpha))
+            ctx.setLineWidth(20)
+            ctx.stroke(CGRect(x: 0, y: 0, width: W, height: H).insetBy(dx: 10, dy: 10))
+        }
+
         // ── Confetti (0–2 s) ─────────────────────────────────
         if elapsed < 2.0 {
             for p in particles {
@@ -274,7 +284,6 @@ class StreamingService: NSObject {
         }
 
         let fontSize: CGFloat = 140 * scale
-        // Prefer Impact; CoreText falls back gracefully if unavailable
         let font = CTFontCreateWithName("Impact" as CFString, fontSize, nil)
 
         // Outline pass (black stroke drawn slightly larger)
@@ -297,7 +306,6 @@ class StreamingService: NSObject {
             let textY = H / 2 - bounds.height / 2 - bounds.origin.y
 
             if isOutline {
-                // Draw black outline by shifting in 4 directions
                 for dx: CGFloat in [-3, 3] {
                     for dy: CGFloat in [-3, 3] {
                         ctx.textMatrix = .identity
@@ -310,6 +318,20 @@ class StreamingService: NSObject {
                 ctx.textPosition = CGPoint(x: textX, y: textY)
                 CTLineDraw(line, ctx)
             }
+        }
+
+        // ── Spotlight sweep (0.2–1.0 s) ──────────────────────
+        // Diagonal white beam sweeping left→right over GOAL! text
+        if elapsed >= 0.2 && elapsed < 1.0 {
+            let t = (elapsed - 0.2) / 0.8                   // 0→1
+            let beamX = -250 + t * (W + 500)
+            let beamAlpha = sin(t * .pi) * 0.45             // fade in then out
+            ctx.saveGState()
+            ctx.translateBy(x: beamX, y: H / 2)
+            ctx.rotate(by: 0.32)                            // ~18° tilt
+            ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: beamAlpha))
+            ctx.fill(CGRect(x: -90, y: -H, width: 180, height: H * 2))
+            ctx.restoreGState()
         }
 
         return ctx.makeImage().map { CIImage(cgImage: $0) }

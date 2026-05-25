@@ -12,8 +12,13 @@ class StreamingService: NSObject {
     // Our own capture session for video (we apply overlay before feeding HaishinKit)
     private let captureSession = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
-    private let captureQueue = DispatchQueue(label: "com.scoreboard.capture", qos: .userInteractive)
+    // .userInitiated: 讓系統熱管理有喘息空間，串流延遲幾乎不受影響
+    private let captureQueue = DispatchQueue(label: "com.scoreboard.capture", qos: .userInitiated)
     private let ciContext = CIContext(options: [.workingColorSpace: NSNull()])
+
+    // 每幀重複使用，避免每秒 30 次 runtime lookup + alloc
+    private let compositeFilter = CIFilter(name: "CISourceOverCompositing")!
+    private let deviceRGB = CGColorSpaceCreateDeviceRGB()
 
     // Overlay — built on main thread, read on capture queue
     private let overlayLock = NSLock()
@@ -49,7 +54,7 @@ class StreamingService: NSObject {
 
         captureSession.commitConfiguration()
 
-        DispatchQueue.global(qos: .userInteractive).async {
+        DispatchQueue.global(qos: .userInitiated).async {
             self.captureSession.startRunning()
         }
     }
@@ -118,6 +123,10 @@ class StreamingService: NSObject {
     func stopStream(completion: @escaping () -> Void) {
         rtmpStream?.close()
         rtmpConnection.close()
+        // 停播後停止相機，否則 captureOutput 仍每秒執行 30 次白燒 CPU/GPU
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.captureSession.stopRunning()
+        }
         completion()
     }
 
@@ -197,14 +206,12 @@ extension StreamingService: AVCaptureVideoDataOutputSampleBufferDelegate {
             // Overlay was built at exact pixel size (scale=1), crop to frame bounds to be safe
             let clippedOverlay = overlay.cropped(to: frameBounds)
 
-            if let filter = CIFilter(name: "CISourceOverCompositing") {
-                filter.setValue(clippedOverlay, forKey: kCIInputImageKey)
-                filter.setValue(videoImage, forKey: kCIInputBackgroundImageKey)
-                if let composited = filter.outputImage {
-                    ciContext.render(composited, to: pixelBuffer,
-                                     bounds: frameBounds,
-                                     colorSpace: CGColorSpaceCreateDeviceRGB())
-                }
+            compositeFilter.setValue(clippedOverlay, forKey: kCIInputImageKey)
+            compositeFilter.setValue(videoImage, forKey: kCIInputBackgroundImageKey)
+            if let composited = compositeFilter.outputImage {
+                ciContext.render(composited, to: pixelBuffer,
+                                 bounds: frameBounds,
+                                 colorSpace: deviceRGB)
             }
         }
 

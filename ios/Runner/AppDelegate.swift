@@ -65,6 +65,9 @@ import UIKit
                     awayScore: args["awayScore"] as? Int ?? 0
                 )
                 result(nil)
+            case "triggerGoal":
+                self?.streamingService?.triggerGoal()
+                result(nil)
             default:
                 result(FlutterMethodNotImplemented)
             }

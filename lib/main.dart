@@ -202,6 +202,11 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
     _syncScore();
   }
 
+  Future<void> _triggerGoal() async {
+    HapticFeedback.heavyImpact();
+    await _streamChannel.invokeMethod('triggerGoal');
+  }
+
   void _reset() {
     showDialog(
       context: context,
@@ -285,6 +290,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                       ),
                       _CenterPanel(
                           onReset: _reset,
+                          onGoal: _isStreaming ? _triggerGoal : null,
                           isStreaming: _isStreaming),
                       Expanded(
                         child: _TeamPanel(
@@ -598,7 +604,7 @@ class _TeamPanel extends StatelessWidget {
             '$score',
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 88,
+              fontSize: 68,
               fontWeight: FontWeight.w900,
               height: 1.0,
             ),
@@ -628,10 +634,11 @@ class _TeamPanel extends StatelessWidget {
 
 class _CenterPanel extends StatelessWidget {
   final VoidCallback onReset;
+  final VoidCallback? onGoal;
   final bool isStreaming;
 
   const _CenterPanel(
-      {required this.onReset, required this.isStreaming});
+      {required this.onReset, required this.onGoal, required this.isStreaming});
 
   @override
   Widget build(BuildContext context) {
@@ -666,7 +673,39 @@ class _CenterPanel extends StatelessWidget {
               letterSpacing: 2,
             ),
           ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
+        if (onGoal != null)
+          GestureDetector(
+            onTap: onGoal,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFFFD700), Color(0xFFFF8C00)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFFFFD700).withOpacity(0.5),
+                    blurRadius: 10,
+                    spreadRadius: 1,
+                  ),
+                ],
+              ),
+              child: const Text(
+                'GOAL!',
+                style: TextStyle(
+                  color: Colors.black,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.5,
+                ),
+              ),
+            ),
+          ),
+        const SizedBox(height: 12),
         GestureDetector(
           onTap: onReset,
           child: Container(

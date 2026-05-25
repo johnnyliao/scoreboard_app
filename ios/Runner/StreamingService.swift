@@ -137,7 +137,7 @@ class StreamingService: NSObject {
 
                     self.rtmpConnection.addEventListener(
                         .rtmpStatus,
-                        selector: #selector(self.rtmpStatusHandler(_:)),
+                        selector: #selector(self.rtmpConnectHandler(_:)),
                         observer: self
                     )
 
@@ -145,7 +145,12 @@ class StreamingService: NSObject {
                         guard let self, self.streamStartCompletion != nil else { return }
                         self.rtmpConnection.removeEventListener(
                             .rtmpStatus,
-                            selector: #selector(self.rtmpStatusHandler(_:)),
+                            selector: #selector(self.rtmpConnectHandler(_:)),
+                            observer: self
+                        )
+                        self.rtmpStream?.removeEventListener(
+                            .rtmpStatus,
+                            selector: #selector(self.rtmpPublishHandler(_:)),
                             observer: self
                         )
                         self.streamStartCompletion?(false, "RTMP 連線逾時，請確認網路")
@@ -153,7 +158,7 @@ class StreamingService: NSObject {
                         self.pendingStreamKey = nil
                     }
                     self.connectTimeoutItem = timeout
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
 
                     self.rtmpConnection.connect(url)
                 }
@@ -161,35 +166,70 @@ class StreamingService: NSObject {
         }
     }
 
-    @objc private func rtmpStatusHandler(_ notification: Notification) {
+    // Step 1: wait for TCP/RTMP connection to succeed
+    @objc private func rtmpConnectHandler(_ notification: Notification) {
         let event = Event.from(notification)
         guard let data = event.data as? [String: Any?],
               let code = data["code"] as? String else { return }
 
         if code == "NetConnection.Connect.Success" {
-            connectTimeoutItem?.cancel()
-            connectTimeoutItem = nil
             rtmpConnection.removeEventListener(
                 .rtmpStatus,
-                selector: #selector(rtmpStatusHandler(_:)),
+                selector: #selector(rtmpConnectHandler(_:)),
+                observer: self
+            )
+            // Step 2: listen for publish acceptance from the stream object
+            rtmpStream?.addEventListener(
+                .rtmpStatus,
+                selector: #selector(rtmpPublishHandler(_:)),
                 observer: self
             )
             rtmpStream?.publish(pendingStreamKey)
-            DispatchQueue.main.async {
-                self.streamStartCompletion?(true, nil)
-                self.streamStartCompletion = nil
-                self.pendingStreamKey = nil
-            }
         } else if code.contains("Failed") || code.contains("Rejected") || code == "NetConnection.Connect.Closed" {
             connectTimeoutItem?.cancel()
             connectTimeoutItem = nil
             rtmpConnection.removeEventListener(
                 .rtmpStatus,
-                selector: #selector(rtmpStatusHandler(_:)),
+                selector: #selector(rtmpConnectHandler(_:)),
                 observer: self
             )
             DispatchQueue.main.async {
                 self.streamStartCompletion?(false, "RTMP 連線失敗: \(code)")
+                self.streamStartCompletion = nil
+                self.pendingStreamKey = nil
+            }
+        }
+    }
+
+    // Step 2: wait for the RTMP server to accept the publish command
+    @objc private func rtmpPublishHandler(_ notification: Notification) {
+        let event = Event.from(notification)
+        guard let data = event.data as? [String: Any?],
+              let code = data["code"] as? String else { return }
+
+        if code == "NetStream.Publish.Start" {
+            connectTimeoutItem?.cancel()
+            connectTimeoutItem = nil
+            rtmpStream?.removeEventListener(
+                .rtmpStatus,
+                selector: #selector(rtmpPublishHandler(_:)),
+                observer: self
+            )
+            DispatchQueue.main.async {
+                self.streamStartCompletion?(true, nil)
+                self.streamStartCompletion = nil
+                self.pendingStreamKey = nil
+            }
+        } else if code.contains("Error") || code.contains("Bad") || code.contains("Rejected") || code.contains("Denied") {
+            connectTimeoutItem?.cancel()
+            connectTimeoutItem = nil
+            rtmpStream?.removeEventListener(
+                .rtmpStatus,
+                selector: #selector(rtmpPublishHandler(_:)),
+                observer: self
+            )
+            DispatchQueue.main.async {
+                self.streamStartCompletion?(false, "串流發布失敗: \(code)")
                 self.streamStartCompletion = nil
                 self.pendingStreamKey = nil
             }
@@ -203,7 +243,12 @@ class StreamingService: NSObject {
         pendingStreamKey = nil
         rtmpConnection.removeEventListener(
             .rtmpStatus,
-            selector: #selector(rtmpStatusHandler(_:)),
+            selector: #selector(rtmpConnectHandler(_:)),
+            observer: self
+        )
+        rtmpStream?.removeEventListener(
+            .rtmpStatus,
+            selector: #selector(rtmpPublishHandler(_:)),
             observer: self
         )
         rtmpStream?.close()

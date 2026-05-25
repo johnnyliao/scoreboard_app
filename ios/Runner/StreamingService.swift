@@ -5,78 +5,31 @@ import UIKit
 import CoreImage
 import CoreText
 
-// MARK: - Overlay effect — called by HaishinKit per-frame inside its encoder pipeline
-
-final class ScoreboardOverlayEffect: VideoEffect {
-    private weak var service: StreamingService?
-    // Each effect instance owns its own filters (never accessed concurrently)
-    private let compositeFilter = CIFilter(name: "CISourceOverCompositing")!
-    private let celebFilter     = CIFilter(name: "CISourceOverCompositing")!
-
-    init(service: StreamingService) { self.service = service }
-
-    override func execute(_ image: CIImage, info: CMSampleBuffer?) -> CIImage {
-        guard let svc = service else { return image }
-
-        let frameBounds = image.extent
-        let frameW = Int(frameBounds.width)
-        let frameH = Int(frameBounds.height)
-        var current = image
-
-        svc.overlayLock.lock()
-        let scoreOverlay  = svc.cachedOverlay
-        let celStart      = svc.celebrationStart
-        let celParticles  = svc.confettiParticles
-        svc.overlayLock.unlock()
-
-        // Layer 1 – score box
-        if let overlay = scoreOverlay {
-            compositeFilter.setValue(overlay.cropped(to: frameBounds), forKey: kCIInputImageKey)
-            compositeFilter.setValue(current, forKey: kCIInputBackgroundImageKey)
-            if let out = compositeFilter.outputImage { current = out }
-        }
-
-        // Layer 2 – celebration
-        if let start = celStart {
-            let elapsed = CGFloat(-start.timeIntervalSinceNow)
-            if elapsed >= CGFloat(svc.celebrationDuration) {
-                svc.overlayLock.lock()
-                if svc.celebrationStart == start {
-                    svc.celebrationStart = nil
-                    svc.confettiParticles = []
-                }
-                svc.overlayLock.unlock()
-            } else if let celOverlay = svc.makeCelebrationOverlay(
-                elapsed: elapsed, particles: celParticles, frameW: frameW, frameH: frameH) {
-                celebFilter.setValue(celOverlay, forKey: kCIInputImageKey)
-                celebFilter.setValue(current,    forKey: kCIInputBackgroundImageKey)
-                if let out = celebFilter.outputImage { current = out }
-            }
-        }
-
-        return current
-    }
-}
-
-// MARK: - StreamingService
-
 class StreamingService: NSObject {
     private let rtmpConnection = RTMPConnection()
     private var rtmpStream: RTMPStream?
     private(set) var previewView: UIView?
 
-    // deviceRGB is used by makeCelebrationOverlay (called from effect thread — safe)
-    fileprivate let deviceRGB = CGColorSpaceCreateDeviceRGB()
+    // ── Camera pipeline (we own this, not HaishinKit) ─────────
+    private let captureSession = AVCaptureSession()
+    private let videoOutput    = AVCaptureVideoDataOutput()
+    private let captureQueue   = DispatchQueue(label: "com.scoreboard.capture", qos: .userInitiated)
+    private let ciContext       = CIContext(options: [.workingColorSpace: NSNull()])
 
-    // Score overlay — main thread writes (updateScore), effect reads (under lock)
-    let overlayLock = NSLock()
-    fileprivate(set) var cachedOverlay: CIImage?
+    // Cached per-frame CIFilter objects
+    private let compositeFilter = CIFilter(name: "CISourceOverCompositing")!
+    private let celebFilter     = CIFilter(name: "CISourceOverCompositing")!
+    private let deviceRGB       = CGColorSpaceCreateDeviceRGB()
+
+    // Score overlay — main thread writes, capture queue reads
+    private let overlayLock = NSLock()
+    private var cachedOverlay: CIImage?
     private var overlaySize: CGSize = .zero
 
     // Celebration state — same lock
-    var celebrationStart: Date?
-    let celebrationDuration: TimeInterval = 3.0
-    var confettiParticles: [Particle] = []
+    private var celebrationStart: Date?
+    private let celebrationDuration: TimeInterval = 3.0
+    private var confettiParticles: [Particle] = []
 
     // RTMP connection state
     private var pendingStreamKey: String?
@@ -84,7 +37,7 @@ class StreamingService: NSObject {
     private var connectTimeoutItem: DispatchWorkItem?
 
     // ── Particle ──────────────────────────────────────────────
-    struct Particle {
+    private struct Particle {
         let x0, y0: CGFloat
         let vx, vy: CGFloat
         let r, g, b: CGFloat
@@ -94,10 +47,35 @@ class StreamingService: NSObject {
 
     override init() {
         super.init()
+        setupCapture()
         setupStream()
     }
 
     // MARK: - Setup
+
+    private func setupCapture() {
+        captureSession.beginConfiguration()
+        captureSession.sessionPreset = .hd1920x1080
+
+        if let cam = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+           let input = try? AVCaptureDeviceInput(device: cam),
+           captureSession.canAddInput(input) {
+            captureSession.addInput(input)
+        }
+
+        videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        videoOutput.setSampleBufferDelegate(self, queue: captureQueue)
+        if captureSession.canAddOutput(videoOutput) {
+            captureSession.addOutput(videoOutput)
+            videoOutput.connection(with: .video)?.videoOrientation = .landscapeRight
+        }
+        captureSession.commitConfiguration()
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.captureSession.startRunning()
+        }
+    }
 
     private func setupStream() {
         let stream = RTMPStream(connection: rtmpConnection)
@@ -111,13 +89,7 @@ class StreamingService: NSObject {
         audioSettings.bitRate = 128 * 1000
         stream.audioSettings = audioSettings
 
-        // attachCamera initialises HaishinKit's encoder pipeline (mandatory)
-        stream.attachCamera(AVCaptureDevice.default(.builtInWideAngleCamera,
-                                                    for: .video, position: .back))
-        stream.attachAudio(AVCaptureDevice.default(for: .audio))
-
-        // Register overlay effect — executed per-frame inside HaishinKit
-        stream.registerVideoEffect(ScoreboardOverlayEffect(service: self))
+        stream.attachAudio(AVCaptureDevice.default(for: .audio)) { _, _ in }
 
         let preview = MTHKView(frame: .zero)
         preview.videoGravity = .resizeAspectFill
@@ -153,6 +125,12 @@ class StreamingService: NSObject {
                     self.celebrationStart = nil
                     self.confettiParticles = []
                     self.overlayLock.unlock()
+
+                    if !self.captureSession.isRunning {
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            self.captureSession.startRunning()
+                        }
+                    }
 
                     self.pendingStreamKey = key
                     self.streamStartCompletion = completion
@@ -234,6 +212,9 @@ class StreamingService: NSObject {
         celebrationStart = nil
         confettiParticles = []
         overlayLock.unlock()
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.captureSession.stopRunning()
+        }
         completion()
     }
 
@@ -310,11 +291,11 @@ class StreamingService: NSObject {
         return s
     }
 
-    // MARK: - Celebration overlay (called from effect thread — uses only CoreGraphics/CoreText)
+    // MARK: - Celebration overlay (capture queue — CoreGraphics + CoreText only)
 
-    func makeCelebrationOverlay(elapsed: CGFloat,
-                                particles: [Particle],
-                                frameW: Int, frameH: Int) -> CIImage? {
+    private func makeCelebrationOverlay(elapsed: CGFloat,
+                                         particles: [Particle],
+                                         frameW: Int, frameH: Int) -> CIImage? {
         guard let ctx = CGContext(
             data: nil, width: frameW, height: frameH,
             bitsPerComponent: 8, bytesPerRow: frameW * 4,
@@ -326,14 +307,12 @@ class StreamingService: NSObject {
         let W = CGFloat(frameW), H = CGFloat(frameH)
         let gravity: CGFloat = 420
 
-        // White flash (0–1.5 s)
         if elapsed < 1.5 {
             let alpha = (1 - elapsed / 1.5) * 0.70
             ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: alpha))
             ctx.fill(CGRect(x: 0, y: 0, width: W, height: H))
         }
 
-        // Border glow pulse (0–2 s, 3 pulses)
         if elapsed < 2.0 {
             let pulsePeriod: CGFloat = 2.0 / 3.0
             let t = elapsed.truncatingRemainder(dividingBy: pulsePeriod) / pulsePeriod
@@ -343,7 +322,6 @@ class StreamingService: NSObject {
             ctx.stroke(CGRect(x: 0, y: 0, width: W, height: H).insetBy(dx: 10, dy: 10))
         }
 
-        // Confetti (0–2 s)
         if elapsed < 2.0 {
             for p in particles {
                 let px    = p.x0 + p.vx * elapsed
@@ -359,7 +337,6 @@ class StreamingService: NSObject {
             }
         }
 
-        // GOAL! text — scale 0.6→3.0 (0–0.4 s), 3.0→1.3 (0.4–0.8 s), hold 1.3
         let scale: CGFloat
         if elapsed < 0.4 {
             let t = elapsed / 0.4
@@ -407,7 +384,6 @@ class StreamingService: NSObject {
             }
         }
 
-        // Spotlight sweep (0.2–1.0 s)
         if elapsed >= 0.2 && elapsed < 1.0 {
             let t = (elapsed - 0.2) / 0.8
             let beamX = -250 + t * (W + 500)
@@ -421,5 +397,50 @@ class StreamingService: NSObject {
         }
 
         return ctx.makeImage().map { CIImage(cgImage: $0) }
+    }
+}
+
+// MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
+
+extension StreamingService: AVCaptureVideoDataOutputSampleBufferDelegate {
+    func captureOutput(_ output: AVCaptureOutput,
+                       didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        guard let pixelBuffer = sampleBuffer.imageBuffer else { return }
+
+        overlayLock.lock()
+        let scoreOverlay = cachedOverlay
+        let celStart     = celebrationStart
+        let celParticles = confettiParticles
+        overlayLock.unlock()
+
+        let frameW      = CVPixelBufferGetWidth(pixelBuffer)
+        let frameH      = CVPixelBufferGetHeight(pixelBuffer)
+        let frameBounds = CGRect(x: 0, y: 0, width: frameW, height: frameH)
+
+        var current = CIImage(cvPixelBuffer: pixelBuffer)
+
+        if let overlay = scoreOverlay {
+            compositeFilter.setValue(overlay.cropped(to: frameBounds), forKey: kCIInputImageKey)
+            compositeFilter.setValue(current, forKey: kCIInputBackgroundImageKey)
+            if let out = compositeFilter.outputImage { current = out }
+        }
+
+        if let start = celStart {
+            let elapsed = CGFloat(-start.timeIntervalSinceNow)
+            if elapsed >= CGFloat(celebrationDuration) {
+                overlayLock.lock()
+                if celebrationStart == start { celebrationStart = nil; confettiParticles = [] }
+                overlayLock.unlock()
+            } else if let celOverlay = makeCelebrationOverlay(
+                elapsed: elapsed, particles: celParticles, frameW: frameW, frameH: frameH) {
+                celebFilter.setValue(celOverlay, forKey: kCIInputImageKey)
+                celebFilter.setValue(current,    forKey: kCIInputBackgroundImageKey)
+                if let out = celebFilter.outputImage { current = out }
+            }
+        }
+
+        ciContext.render(current, to: pixelBuffer, bounds: frameBounds, colorSpace: deviceRGB)
+        rtmpStream?.append(sampleBuffer)
     }
 }

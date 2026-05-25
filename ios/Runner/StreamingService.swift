@@ -30,6 +30,11 @@ class StreamingService: NSObject {
     private let celebrationDuration: TimeInterval = 3.0
     private var confettiParticles: [Particle] = []
 
+    // RTMP connection state
+    private var pendingStreamKey: String?
+    private var streamStartCompletion: ((Bool, String?) -> Void)?
+    private var connectTimeoutItem: DispatchWorkItem?
+
     // ── Particle ──────────────────────────────────────────────
     private struct Particle {
         let x0, y0: CGFloat        // UIKit coords (y=0 top)
@@ -120,17 +125,89 @@ class StreamingService: NSObject {
                     self.confettiParticles = []
                     self.overlayLock.unlock()
 
-                    self.rtmpConnection.connect(url)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        self.rtmpStream?.publish(key)
-                        completion(true, nil)
+                    // Restart capture session if a previous stopStream shut it down
+                    if !self.captureSession.isRunning {
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            self.captureSession.startRunning()
+                        }
                     }
+
+                    // Store for use in rtmpStatusHandler
+                    self.pendingStreamKey = key
+                    self.streamStartCompletion = completion
+
+                    // Wait for NetConnection.Connect.Success before publishing
+                    self.rtmpConnection.addEventListener(
+                        .rtmpStatus,
+                        selector: #selector(self.rtmpStatusHandler(_:)),
+                        observer: self
+                    )
+
+                    // 10-second timeout in case the event never fires
+                    let timeout = DispatchWorkItem { [weak self] in
+                        guard let self, self.streamStartCompletion != nil else { return }
+                        self.rtmpConnection.removeEventListener(
+                            .rtmpStatus,
+                            selector: #selector(self.rtmpStatusHandler(_:)),
+                            observer: self
+                        )
+                        self.streamStartCompletion?(false, "RTMP 連線逾時，請確認網路")
+                        self.streamStartCompletion = nil
+                        self.pendingStreamKey = nil
+                    }
+                    self.connectTimeoutItem = timeout
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
+
+                    self.rtmpConnection.connect(url)
                 }
             }
         }
     }
 
+    @objc private func rtmpStatusHandler(_ notification: Notification) {
+        guard let data = notification.userInfo?["data"] as? [String: Any],
+              let code = data["code"] as? String else { return }
+
+        if code == "NetConnection.Connect.Success" {
+            connectTimeoutItem?.cancel()
+            connectTimeoutItem = nil
+            rtmpConnection.removeEventListener(
+                .rtmpStatus,
+                selector: #selector(rtmpStatusHandler(_:)),
+                observer: self
+            )
+            rtmpStream?.publish(pendingStreamKey)
+            DispatchQueue.main.async {
+                self.streamStartCompletion?(true, nil)
+                self.streamStartCompletion = nil
+                self.pendingStreamKey = nil
+            }
+        } else if code.contains("Failed") || code.contains("Rejected") || code == "NetConnection.Connect.Closed" {
+            connectTimeoutItem?.cancel()
+            connectTimeoutItem = nil
+            rtmpConnection.removeEventListener(
+                .rtmpStatus,
+                selector: #selector(rtmpStatusHandler(_:)),
+                observer: self
+            )
+            DispatchQueue.main.async {
+                self.streamStartCompletion?(false, "RTMP 連線失敗: \(code)")
+                self.streamStartCompletion = nil
+                self.pendingStreamKey = nil
+            }
+        }
+    }
+
     func stopStream(completion: @escaping () -> Void) {
+        connectTimeoutItem?.cancel()
+        connectTimeoutItem = nil
+        streamStartCompletion = nil
+        pendingStreamKey = nil
+        rtmpConnection.removeEventListener(
+            .rtmpStatus,
+            selector: #selector(rtmpStatusHandler(_:)),
+            observer: self
+        )
         rtmpStream?.close()
         rtmpConnection.close()
         overlayLock.lock()

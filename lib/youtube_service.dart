@@ -89,7 +89,7 @@ class YouTubeService {
         'cdn': {
           'frameRate': '30fps',
           'ingestionType': 'rtmp',
-          'resolution': '720p',
+          'resolution': '1080p',
         },
         'contentDetails': {'isReusable': false},
       }),

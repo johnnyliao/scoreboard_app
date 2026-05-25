@@ -232,39 +232,41 @@ class StreamingService: NSObject {
         let W = CGFloat(frameW), H = CGFloat(frameH)
         let gravity: CGFloat = 420   // px/s²
 
-        // ── White flash (0–0.5 s) ────────────────────────────
-        if elapsed < 0.5 {
-            let alpha = (1 - elapsed / 0.5) * 0.70
+        // ── White flash (0–1.5 s) ────────────────────────────
+        if elapsed < 1.5 {
+            let alpha = (1 - elapsed / 1.5) * 0.70
             ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: alpha))
             ctx.fill(CGRect(x: 0, y: 0, width: W, height: H))
         }
 
-        // ── Confetti ─────────────────────────────────────────
-        for p in particles {
-            let px    = p.x0 + p.vx * elapsed
-            let pyTop = p.y0 + p.vy * elapsed + 0.5 * gravity * elapsed * elapsed
-            let pyCG  = H - pyTop                          // flip y for CGContext
-            guard pyCG > -40 && pyCG < H + 40 else { continue }
+        // ── Confetti (0–2 s) ─────────────────────────────────
+        if elapsed < 2.0 {
+            for p in particles {
+                let px    = p.x0 + p.vx * elapsed
+                let pyTop = p.y0 + p.vy * elapsed + 0.5 * gravity * elapsed * elapsed
+                let pyCG  = H - pyTop                      // flip y for CGContext
+                guard pyCG > -40 && pyCG < H + 40 else { continue }
 
-            ctx.saveGState()
-            ctx.translateBy(x: px, y: pyCG)
-            ctx.rotate(by: p.rot0 + p.rotV * elapsed)
-            ctx.setFillColor(CGColor(red: p.r, green: p.g, blue: p.b, alpha: 0.92))
-            ctx.fill(CGRect(x: -p.w / 2, y: -p.h / 2, width: p.w, height: p.h))
-            ctx.restoreGState()
+                ctx.saveGState()
+                ctx.translateBy(x: px, y: pyCG)
+                ctx.rotate(by: p.rot0 + p.rotV * elapsed)
+                ctx.setFillColor(CGColor(red: p.r, green: p.g, blue: p.b, alpha: 0.92))
+                ctx.fill(CGRect(x: -p.w / 2, y: -p.h / 2, width: p.w, height: p.h))
+                ctx.restoreGState()
+            }
         }
 
         // ── GOAL! text ────────────────────────────────────────
-        // Scale animation: 0.6→1.2 (0–0.3 s), 1.2→1.0 (0.3–0.5 s), hold 1.0
+        // Scale animation: 0.6→3.0 (0–0.4 s ease-out), 3.0→1.3 (0.4–0.8 s), hold 1.3
         let scale: CGFloat
-        if elapsed < 0.3 {
-            let t = elapsed / 0.3
-            scale = 0.6 + (1 - (1 - t) * (1 - t)) * 0.6   // ease-out quadratic
-        } else if elapsed < 0.5 {
-            let t = (elapsed - 0.3) / 0.2
-            scale = 1.2 - t * 0.2
+        if elapsed < 0.4 {
+            let t = elapsed / 0.4
+            scale = 0.6 + (1 - (1 - t) * (1 - t)) * 2.4   // ease-out quadratic, 0.6→3.0
+        } else if elapsed < 0.8 {
+            let t = (elapsed - 0.4) / 0.4
+            scale = 3.0 - t * 1.7                           // linear, 3.0→1.3
         } else {
-            scale = 1.0
+            scale = 1.3
         }
         let goalAlpha: CGFloat = elapsed > 2.5 ? max(0, 1 - (elapsed - 2.5) / 0.5) : 1.0
         guard goalAlpha > 0 else {

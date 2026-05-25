@@ -166,7 +166,7 @@ class StreamingService: NSObject {
 
     @objc private func rtmpStatusHandler(_ notification: Notification) {
         let event = Event.from(notification)
-        guard let data = event.data as? [String: Any],
+        guard let data = event.data as? [String: Any?],
               let code = data["code"] as? String else { return }
 
         if code == "NetConnection.Connect.Success" {

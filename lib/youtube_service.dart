@@ -2,16 +2,6 @@ import 'dart:convert';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 
-// ─────────────────────────────────────────────────────────────
-// ★ 請到 Google Cloud Console 建立 iOS OAuth 憑證後填入這裡 ★
-//   1. https://console.cloud.google.com/
-//   2. 建立專案 → 啟用「YouTube Data API v3」
-//   3. 憑證 → 建立 OAuth 2.0 用戶端 ID（iOS 應用程式）
-//      套件 ID: com.scoreboard.scoreboardapp
-//   4. 複製「iOS 用戶端 ID」貼在下方，並更新 Info.plist 的
-//      GIDClientID 與 CFBundleURLSchemes（reversed client ID）
-// ─────────────────────────────────────────────────────────────
-// iOS OAuth Client ID (Info.plist GIDClientID 使用同一組)
 const kGoogleIosClientId =
     '78131088279-gs5a1kvq3fbc12o01om6leshn0tsmag1.apps.googleusercontent.com';
 
@@ -23,7 +13,6 @@ class YouTubeService {
 
   static GoogleSignInAccount? get currentUser => _gsi.currentUser;
 
-  /// 嘗試靜默登入（App 啟動時還原上次登入狀態）
   static Future<GoogleSignInAccount?> signInSilently() =>
       _gsi.signInSilently();
 
@@ -35,12 +24,9 @@ class YouTubeService {
     final user = _gsi.currentUser;
     if (user == null) throw Exception('未登入');
 
-    // iOS 上 canAccessScopes 不可靠；直接呼叫 requestScopes
-    // 已授權時不會彈視窗，尚未授權時才會跳出 Google 同意畫面
     final granted = await _gsi.requestScopes([_youtubeScope]);
     if (!granted) throw Exception('需要 YouTube 管理權限，請在 Google 同意畫面按「允許」');
 
-    // requestScopes 後重新取 authentication，確保 token 包含新 scope
     final auth = await _gsi.currentUser!.authentication;
     final token = auth.accessToken;
     if (token == null) throw Exception('無法取得 access token');
@@ -55,20 +41,19 @@ class YouTubeService {
       'Content-Type': 'application/json',
     };
 
-    // 1. 建立 liveBroadcast
+    // 1. 建立 liveBroadcast（關閉 autoStart，改用手動 transition）
     final bRes = await http.post(
-      Uri.parse('$_apiBase/liveBroadcasts'
-          '?part=snippet,contentDetails,status'),
+      Uri.parse('$_apiBase/liveBroadcasts?part=snippet,contentDetails,status'),
       headers: headers,
       body: jsonEncode({
         'snippet': {
           'title': title,
           'scheduledStartTime':
-              DateTime.now().toUtc().add(const Duration(seconds: 10)).toIso8601String(),
+              DateTime.now().toUtc().add(const Duration(seconds: 30)).toIso8601String(),
         },
         'contentDetails': {
-          'enableAutoStart': true,
-          'enableAutoStop': true,
+          'enableAutoStart': false,
+          'enableAutoStop': false,
           'monitorStream': {'enableMonitorStream': false},
         },
         'status': {
@@ -111,10 +96,46 @@ class YouTubeService {
 
     return LiveSetupResult(
       broadcastId: bId,
+      streamId: sId,
       rtmpUrl: rtmpUrl,
       streamKey: streamKey,
       watchUrl: 'https://www.youtube.com/watch?v=$bId',
     );
+  }
+
+  /// 查詢 liveStream 目前的 streamStatus
+  static Future<String?> getStreamStatus(String streamId) async {
+    final token = await _token();
+    final res = await http.get(
+      Uri.parse('$_apiBase/liveStreams?part=status&id=$streamId'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    _check(res, '查詢串流狀態失敗');
+    final body = jsonDecode(res.body) as Map;
+    final items = body['items'] as List;
+    if (items.isEmpty) return null;
+    return items.first['status']?['streamStatus'] as String?;
+  }
+
+  /// 輪詢直到 YouTube 確認收到 RTMP（streamStatus == active），最多等 60 秒
+  static Future<void> waitUntilStreamActive(String streamId) async {
+    for (var i = 0; i < 30; i++) {
+      final status = await getStreamStatus(streamId);
+      if (status == 'active') return;
+      await Future.delayed(const Duration(seconds: 2));
+    }
+    throw Exception('YouTube 未收到 RTMP 串流（等待逾時 60 秒），請確認網路');
+  }
+
+  /// 手動將 broadcast 切換為 live
+  static Future<void> transitionToLive(String broadcastId) async {
+    final token = await _token();
+    final res = await http.post(
+      Uri.parse('$_apiBase/liveBroadcasts/transition'
+          '?broadcastStatus=live&id=$broadcastId&part=status'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    _check(res, '切換直播狀態為 live 失敗');
   }
 
   /// 停播（transition → complete）
@@ -126,9 +147,7 @@ class YouTubeService {
             '?broadcastStatus=complete&id=$broadcastId&part=status'),
         headers: {'Authorization': 'Bearer $token'},
       );
-    } catch (_) {
-      // 停播失敗不影響 App 主流程，靜默忽略
-    }
+    } catch (_) {}
   }
 
   static void _check(http.Response res, String label) {
@@ -146,12 +165,14 @@ class YouTubeService {
 
 class LiveSetupResult {
   final String broadcastId;
+  final String streamId;
   final String rtmpUrl;
   final String streamKey;
   final String watchUrl;
 
   const LiveSetupResult({
     required this.broadcastId,
+    required this.streamId,
     required this.rtmpUrl,
     required this.streamKey,
     required this.watchUrl,

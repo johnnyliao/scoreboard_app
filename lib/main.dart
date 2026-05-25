@@ -45,6 +45,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   bool _isStreaming = false;
   bool _isLoading = false;
   bool _showCamera = false;
+  String _loadingStatus = '';
 
   GoogleSignInAccount? _account;
   String? _watchUrl;
@@ -111,20 +112,28 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       _showError('請輸入直播標題');
       return;
     }
-    setState(() => _isLoading = true);
+    setState(() { _isLoading = true; _loadingStatus = '建立直播活動…'; });
     try {
       final live = await YouTubeService.setupLive(title: title);
 
+      if (mounted) setState(() => _loadingStatus = '連接 RTMP…');
       await _streamChannel.invokeMethod('startStream', {
         'url': live.rtmpUrl,
         'key': live.streamKey,
       });
+
+      if (mounted) setState(() => _loadingStatus = '等待 YouTube 確認串流…');
+      await YouTubeService.waitUntilStreamActive(live.streamId);
+
+      if (mounted) setState(() => _loadingStatus = '切換直播為上線狀態…');
+      await YouTubeService.transitionToLive(live.broadcastId);
 
       setState(() {
         _isStreaming = true;
         _showCamera = true;
         _watchUrl = live.watchUrl;
         _broadcastId = live.broadcastId;
+        _loadingStatus = '';
       });
       _syncScore();
     } on PlatformException catch (e) {
@@ -132,7 +141,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
     } catch (e) {
       _showError('$e');
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() { _isLoading = false; _loadingStatus = ''; });
     }
   }
 
@@ -257,6 +266,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                   account: _account,
                   isStreaming: _isStreaming,
                   isLoading: _isLoading,
+                  loadingStatus: _loadingStatus,
                   titleCtrl: _titleCtrl,
                   watchUrl: _watchUrl,
                   onSignIn: _signIn,
@@ -329,6 +339,7 @@ class _TopBar extends StatelessWidget {
   final GoogleSignInAccount? account;
   final bool isStreaming;
   final bool isLoading;
+  final String loadingStatus;
   final TextEditingController titleCtrl;
   final String? watchUrl;
   final VoidCallback onSignIn;
@@ -340,6 +351,7 @@ class _TopBar extends StatelessWidget {
     required this.account,
     required this.isStreaming,
     required this.isLoading,
+    required this.loadingStatus,
     required this.titleCtrl,
     required this.watchUrl,
     required this.onSignIn,
@@ -414,11 +426,22 @@ class _TopBar extends StatelessWidget {
 
           // ── Right: action buttons ──
           if (isLoading)
-            const SizedBox(
-              width: 22,
-              height: 22,
-              child: CircularProgressIndicator(
-                  strokeWidth: 2, color: Colors.white),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
+                ),
+                if (loadingStatus.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Text(loadingStatus,
+                      style: const TextStyle(
+                          color: Colors.white70, fontSize: 11)),
+                ],
+              ],
             )
           else if (isStreaming) ...[
             if (watchUrl != null)

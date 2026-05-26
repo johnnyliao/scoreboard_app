@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import AVFoundation
+import HaishinKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
@@ -87,6 +88,7 @@ import AVFoundation
 
     private func configureAudioSession() {
         do {
+            LBLogger.with(HaishinKitIdentifier).level = .trace
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(
                 .playAndRecord,

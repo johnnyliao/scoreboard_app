@@ -199,7 +199,7 @@ class StreamingService: NSObject {
     private func attachAudioIfNeeded() {
         guard !audioAttached else { return }
         audioAttached = true  // set before async callback to prevent re-entry
-        rtmpStream?.attachAudio(AVCaptureDevice.default(for: .audio)) { [weak self] error, _ in
+        rtmpStream?.attachAudio(AVCaptureDevice.default(for: .audio)) { [weak self] _, error in
             guard error != nil else { return }
             // Attachment failed — reset so the next startStream() can retry
             DispatchQueue.main.async { self?.audioAttached = false }

@@ -227,6 +227,21 @@ class StreamingService: NSObject {
         }
     }
 
+    private func succeedStart() {
+        connectTimeoutItem?.cancel()
+        connectTimeoutItem = nil
+        rtmpStream?.removeEventListener(
+            .rtmpStatus,
+            selector: #selector(rtmpPublishHandler(_:)),
+            observer: self
+        )
+        isStarting = false
+        let completion = streamStartCompletion
+        streamStartCompletion = nil
+        pendingStreamKey = nil
+        completion?(true, nil)
+    }
+
     // Must be called on main thread. Tears down everything and reports failure to Flutter.
     private func failStart(_ message: String) {
         debug("failStart: \(message)")
@@ -294,6 +309,10 @@ class StreamingService: NSObject {
             }
             debug("rtmp publish requested")
             rtmpStream?.publish(key)
+            // On YouTube + HaishinKit 1.9.x, NetStream.Publish.Start may never arrive
+            // even though the ingest later becomes active. Let Flutter continue and use
+            // YouTube's streamStatus polling as the source of truth.
+            succeedStart()
         } else if code.contains("Failed") || code.contains("Rejected") || code == "NetConnection.Connect.Closed" {
             failStart("RTMP 連線失敗: \(code)")
         }

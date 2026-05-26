@@ -9,6 +9,7 @@ class StreamingService: NSObject {
     private let rtmpConnection = RTMPConnection()
     private var rtmpStream: RTMPStream?
     private(set) var previewView: UIView?
+    var onDebugMessage: ((String) -> Void)?
 
     // ── Camera pipeline (we own this, not HaishinKit) ─────────
     private let captureSession  = AVCaptureSession()
@@ -125,9 +126,17 @@ class StreamingService: NSObject {
 
     // MARK: - Stream control
 
+    private func debug(_ message: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.onDebugMessage?(message)
+        }
+    }
+
     // Called on main thread from AppDelegate / platform channel.
     func startStream(url: String, key: String, completion: @escaping (Bool, String?) -> Void) {
+        debug("startStream called")
         guard !isStarting && !isStreaming else {
+            debug("start blocked: already starting or streaming")
             completion(false, "直播已在啟動中")
             return
         }
@@ -144,6 +153,7 @@ class StreamingService: NSObject {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] videoOk in
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] audioOk in
                 guard let self else { return }
+                self.debug("permissions video=\(videoOk) audio=\(audioOk)")
                 guard videoOk && audioOk else {
                     DispatchQueue.main.async { self.failStart("需要攝影機和麥克風權限") }
                     return
@@ -152,8 +162,10 @@ class StreamingService: NSObject {
                 // All AVCaptureSession work runs on sessionQueue.
                 self.sessionQueue.async {
                     if !self.captureConfigured {
+                        self.debug("setupCapture")
                         self.setupCapture()
                     } else if self.captureSession.inputs.isEmpty {
+                        self.debug("rebuild capture input")
                         // First launch: permission granted after setupCapture ran — add input now.
                         self.captureSession.beginConfiguration()
                         if let cam = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
@@ -166,12 +178,14 @@ class StreamingService: NSObject {
                     }
 
                     if !self.captureSession.isRunning {
+                        self.debug("captureSession.startRunning")
                         self.captureSession.startRunning()
                     }
 
                     DispatchQueue.main.async {
                         guard self.isStarting && self.startToken == token else { return }
 
+                        self.debug("attachAudioIfNeeded")
                         self.attachAudioIfNeeded()
                         self.pendingStreamKey = key
 
@@ -183,11 +197,13 @@ class StreamingService: NSObject {
 
                         let timeout = DispatchWorkItem { [weak self] in
                             guard let self, self.streamStartCompletion != nil else { return }
+                            self.debug("RTMP connect timeout")
                             self.failStart("RTMP 連線逾時，請確認網路")
                         }
                         self.connectTimeoutItem = timeout
                         DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
 
+                        self.debug("rtmpConnection.connect: \(url)")
                         self.rtmpConnection.connect(url)
                     }
                 }
@@ -200,6 +216,11 @@ class StreamingService: NSObject {
         guard !audioAttached else { return }
         audioAttached = true  // set before async callback to prevent re-entry
         rtmpStream?.attachAudio(AVCaptureDevice.default(for: .audio)) { [weak self] _, error in
+            if error == nil {
+                self?.debug("attachAudio success")
+            } else {
+                self?.debug("attachAudio failed")
+            }
             guard error != nil else { return }
             // Attachment failed — reset so the next startStream() can retry
             DispatchQueue.main.async { self?.audioAttached = false }
@@ -208,6 +229,7 @@ class StreamingService: NSObject {
 
     // Must be called on main thread. Tears down everything and reports failure to Flutter.
     private func failStart(_ message: String) {
+        debug("failStart: \(message)")
         connectTimeoutItem?.cancel()
         connectTimeoutItem = nil
 
@@ -252,6 +274,7 @@ class StreamingService: NSObject {
         // Also try notification.userInfo in case the data is dispatched there instead.
         guard let code = (event.data as? [String: Any])?["code"] as? String
                       ?? notification.userInfo?["code"] as? String else { return }
+        debug("rtmp connect status: \(code)")
 
         if code == "NetConnection.Connect.Success" {
             rtmpConnection.removeEventListener(
@@ -265,9 +288,11 @@ class StreamingService: NSObject {
                 observer: self
             )
             guard let key = pendingStreamKey else {
+                debug("missing pending stream key")
                 failStart("找不到串流金鑰")
                 return
             }
+            debug("rtmp publish requested")
             rtmpStream?.publish(key)
         } else if code.contains("Failed") || code.contains("Rejected") || code == "NetConnection.Connect.Closed" {
             failStart("RTMP 連線失敗: \(code)")
@@ -283,6 +308,7 @@ class StreamingService: NSObject {
         let event = Event.from(notification)
         guard let code = (event.data as? [String: Any])?["code"] as? String
                       ?? notification.userInfo?["code"] as? String else { return }
+        debug("rtmp publish status: \(code)")
 
         if code == "NetStream.Publish.Start" {
             connectTimeoutItem?.cancel()

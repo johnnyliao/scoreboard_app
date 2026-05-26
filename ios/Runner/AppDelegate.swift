@@ -35,6 +35,9 @@ import HaishinKit
             name: "com.scoreboard/streaming",
             binaryMessenger: controller.binaryMessenger
         )
+        service.onDebugMessage = { message in
+            channel.invokeMethod("debugStatus", arguments: message)
+        }
 
         channel.setMethodCallHandler { [weak self] call, result in
             switch call.method {

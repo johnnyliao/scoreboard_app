@@ -47,6 +47,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   bool _isLoading = false;
   bool _showCamera = false;
   String _loadingStatus = '';
+  String _nativeDebugStatus = '';
 
   GoogleSignInAccount? _account;
   String? _watchUrl;
@@ -64,6 +65,15 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   @override
   void initState() {
     super.initState();
+    _streamChannel.setMethodCallHandler((call) async {
+      if (call.method != 'debugStatus') return;
+      final message = '${call.arguments ?? ''}';
+      if (!mounted) return;
+      setState(() {
+        _nativeDebugStatus = message;
+        _loadingStatus = message;
+      });
+    });
     final now = DateTime.now();
     _titleCtrl = TextEditingController(
       text:
@@ -91,6 +101,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
 
   @override
   void dispose() {
+    _streamChannel.setMethodCallHandler(null);
     _clockTimer?.cancel();
     _batteryTimer?.cancel();
     _titleCtrl.dispose();
@@ -162,7 +173,10 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       _syncScore();
     } on PlatformException catch (e) {
       if (live != null) await YouTubeService.deleteBroadcast(live.broadcastId);
-      _showError(e.message ?? '推流失敗');
+      final message = e.message ?? '推流失敗';
+      final detail =
+          _nativeDebugStatus.isEmpty ? '' : '\n最後狀態: $_nativeDebugStatus';
+      _showError('$message$detail');
     } catch (e) {
       if (live != null) await YouTubeService.deleteBroadcast(live.broadcastId);
       _showError('$e');

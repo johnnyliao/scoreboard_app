@@ -57,7 +57,7 @@ class YouTubeService {
           'monitorStream': {'enableMonitorStream': false},
         },
         'status': {
-          'privacyStatus': 'public',
+          'privacyStatus': 'unlisted',
           'selfDeclaredMadeForKids': false,
         },
       }),

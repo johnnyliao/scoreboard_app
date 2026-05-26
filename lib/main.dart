@@ -38,7 +38,7 @@ class ScoreboardPage extends StatefulWidget {
 class _ScoreboardPageState extends State<ScoreboardPage> {
   int _homeScore = 0;
   int _awayScore = 0;
-  String _homeName = '主隊';
+  String _homeName = '安和';
   String _awayName = '客隊';
 
   bool _isStreaming = false;
@@ -201,7 +201,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   void _saveName(BuildContext ctx, bool isHome, String value) {
     setState(() {
       if (isHome) {
-        _homeName = value.trim().isEmpty ? '主隊' : value.trim();
+        _homeName = value.trim().isEmpty ? '安和' : value.trim();
       } else {
         _awayName = value.trim().isEmpty ? '客隊' : value.trim();
       }

@@ -45,6 +45,10 @@ class StreamingService: NSObject {
     // Audio attachment — deferred until permission is confirmed
     private var audioAttached = false
 
+    // Reusable backing buffer for celebration overlay — allocated once, memset each frame
+    private var celebrationBuffer: UnsafeMutableRawPointer?
+    private var celebrationFrameSize: CGSize = .zero
+
     // ── Particle ──────────────────────────────────────────────
     private struct Particle {
         let x0, y0: CGFloat
@@ -58,6 +62,10 @@ class StreamingService: NSObject {
         super.init()
         setupStream()
         // Camera is set up lazily in startStream() after permissions are confirmed.
+    }
+
+    deinit {
+        if let buf = celebrationBuffer { free(buf) }
     }
 
     // MARK: - Setup
@@ -407,9 +415,21 @@ class StreamingService: NSObject {
     private func makeCelebrationOverlay(elapsed: CGFloat,
                                          particles: [Particle],
                                          frameW: Int, frameH: Int) -> CIImage? {
+        let bytesPerRow = frameW * 4
+        let bufferSize  = frameH * bytesPerRow
+        let newSize     = CGSize(width: frameW, height: frameH)
+
+        if celebrationBuffer == nil || celebrationFrameSize != newSize {
+            if let old = celebrationBuffer { free(old) }
+            celebrationBuffer = malloc(bufferSize)
+            celebrationFrameSize = newSize
+        }
+        guard let buffer = celebrationBuffer else { return nil }
+        memset(buffer, 0, bufferSize)
+
         guard let ctx = CGContext(
-            data: nil, width: frameW, height: frameH,
-            bitsPerComponent: 8, bytesPerRow: frameW * 4,
+            data: buffer, width: frameW, height: frameH,
+            bitsPerComponent: 8, bytesPerRow: bytesPerRow,
             space: deviceRGB,
             bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue |
                         CGImageAlphaInfo.premultipliedFirst.rawValue

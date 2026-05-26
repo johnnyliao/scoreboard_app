@@ -223,7 +223,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
           ),
         ],
       ),
-    );
+    ).then((_) => ctrl.dispose());
   }
 
   void _saveName(BuildContext ctx, bool isHome, String value) {

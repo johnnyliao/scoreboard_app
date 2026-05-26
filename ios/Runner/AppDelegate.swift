@@ -41,17 +41,23 @@ import UIKit
                     result(FlutterError(code: "INVALID_ARGS", message: "需要 url 和 key", details: nil))
                     return
                 }
-                self?.streamingService?.startStream(url: url, key: key) { success, error in
-                    DispatchQueue.main.async {
-                        if success {
-                            result(true)
-                        } else {
-                            result(FlutterError(code: "STREAM_ERROR", message: error, details: nil))
-                        }
+                guard let service = self?.streamingService else {
+                    result(FlutterError(code: "NOT_INITIALIZED", message: "串流服務未就緒", details: nil))
+                    return
+                }
+                service.startStream(url: url, key: key) { success, error in
+                    if success {
+                        result(true)
+                    } else {
+                        result(FlutterError(code: "STREAM_ERROR", message: error, details: nil))
                     }
                 }
             case "stopStream":
-                self?.streamingService?.stopStream {
+                guard let service = self?.streamingService else {
+                    result(FlutterError(code: "NOT_INITIALIZED", message: "串流服務未就緒", details: nil))
+                    return
+                }
+                service.stopStream {
                     result(true)
                 }
             case "updateScore":

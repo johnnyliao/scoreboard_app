@@ -123,9 +123,18 @@ class YouTubeService {
 
   /// 輪詢直到 YouTube 確認收到 RTMP（streamStatus == active），最多等 60 秒
   static Future<void> waitUntilStreamActive(String streamId) async {
+    final token = await _token();
     for (var i = 0; i < 30; i++) {
-      final status = await getStreamStatus(streamId);
-      if (status == 'active') return;
+      final res = await http.get(
+        Uri.parse('$_apiBase/liveStreams?part=status&id=$streamId'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      _check(res, '查詢串流狀態失敗');
+      final items = (jsonDecode(res.body) as Map)['items'] as List;
+      if (items.isNotEmpty) {
+        final status = items.first['status']?['streamStatus'] as String?;
+        if (status == 'active') return;
+      }
       await Future.delayed(const Duration(seconds: 2));
     }
     throw Exception('YouTube 未收到 RTMP 串流（等待逾時 60 秒），請確認網路');

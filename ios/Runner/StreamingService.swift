@@ -124,6 +124,7 @@ class StreamingService: NSObject {
             return
         }
         isStarting = true
+        streamStartCompletion = completion  // set early so failStart can reach it from any path
 
         overlayLock.lock()
         celebrationStart = nil
@@ -134,10 +135,7 @@ class StreamingService: NSObject {
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] audioOk in
                 guard let self else { return }
                 guard videoOk && audioOk else {
-                    DispatchQueue.main.async {
-                        self.isStarting = false
-                        completion(false, "需要攝影機和麥克風權限")
-                    }
+                    DispatchQueue.main.async { self.failStart("需要攝影機和麥克風權限") }
                     return
                 }
 
@@ -163,7 +161,6 @@ class StreamingService: NSObject {
 
                     DispatchQueue.main.async {
                         self.pendingStreamKey = key
-                        self.streamStartCompletion = completion
 
                         self.rtmpConnection.addEventListener(
                             .rtmpStatus,
@@ -173,21 +170,7 @@ class StreamingService: NSObject {
 
                         let timeout = DispatchWorkItem { [weak self] in
                             guard let self, self.streamStartCompletion != nil else { return }
-                            self.rtmpConnection.removeEventListener(
-                                .rtmpStatus,
-                                selector: #selector(self.rtmpConnectHandler(_:)),
-                                observer: self
-                            )
-                            self.rtmpStream?.removeEventListener(
-                                .rtmpStatus,
-                                selector: #selector(self.rtmpPublishHandler(_:)),
-                                observer: self
-                            )
-                            self.isStarting  = false
-                            self.isStreaming = false
-                            self.streamStartCompletion?(false, "RTMP 連線逾時，請確認網路")
-                            self.streamStartCompletion = nil
-                            self.pendingStreamKey = nil
+                            self.failStart("RTMP 連線逾時，請確認網路")
                         }
                         self.connectTimeoutItem = timeout
                         DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
@@ -199,8 +182,47 @@ class StreamingService: NSObject {
         }
     }
 
-    // Step 1: wait for TCP/RTMP connection to succeed
+    // Must be called on main thread. Tears down everything and reports failure to Flutter.
+    private func failStart(_ message: String) {
+        connectTimeoutItem?.cancel()
+        connectTimeoutItem = nil
+
+        rtmpConnection.removeEventListener(
+            .rtmpStatus,
+            selector: #selector(rtmpConnectHandler(_:)),
+            observer: self
+        )
+        rtmpStream?.removeEventListener(
+            .rtmpStatus,
+            selector: #selector(rtmpPublishHandler(_:)),
+            observer: self
+        )
+
+        rtmpStream?.close()
+        rtmpConnection.close()
+
+        let completion = streamStartCompletion
+        isStarting = false
+        isStreaming = false
+        streamStartCompletion = nil
+        pendingStreamKey = nil
+
+        sessionQueue.async {
+            if self.captureSession.isRunning {
+                self.captureSession.stopRunning()
+            }
+            DispatchQueue.main.async {
+                completion?(false, message)
+            }
+        }
+    }
+
+    // Step 1: HaishinKit may call this off main thread — bounce immediately.
     @objc private func rtmpConnectHandler(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in self?.handleRtmpConnect(notification) }
+    }
+
+    private func handleRtmpConnect(_ notification: Notification) {
         let event = Event.from(notification)
         guard let data = event.data as? [String: Any?],
               let code = data["code"] as? String else { return }
@@ -216,27 +238,22 @@ class StreamingService: NSObject {
                 selector: #selector(rtmpPublishHandler(_:)),
                 observer: self
             )
-            rtmpStream?.publish(pendingStreamKey)
-        } else if code.contains("Failed") || code.contains("Rejected") || code == "NetConnection.Connect.Closed" {
-            connectTimeoutItem?.cancel()
-            connectTimeoutItem = nil
-            rtmpConnection.removeEventListener(
-                .rtmpStatus,
-                selector: #selector(rtmpConnectHandler(_:)),
-                observer: self
-            )
-            DispatchQueue.main.async {
-                self.isStarting  = false
-                self.isStreaming = false
-                self.streamStartCompletion?(false, "RTMP 連線失敗: \(code)")
-                self.streamStartCompletion = nil
-                self.pendingStreamKey = nil
+            guard let key = pendingStreamKey else {
+                failStart("找不到串流金鑰")
+                return
             }
+            rtmpStream?.publish(key)
+        } else if code.contains("Failed") || code.contains("Rejected") || code == "NetConnection.Connect.Closed" {
+            failStart("RTMP 連線失敗: \(code)")
         }
     }
 
-    // Step 2: wait for the RTMP server to accept the publish command
+    // Step 2: HaishinKit may call this off main thread — bounce immediately.
     @objc private func rtmpPublishHandler(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in self?.handleRtmpPublish(notification) }
+    }
+
+    private func handleRtmpPublish(_ notification: Notification) {
         let event = Event.from(notification)
         guard let data = event.data as? [String: Any?],
               let code = data["code"] as? String else { return }
@@ -249,28 +266,14 @@ class StreamingService: NSObject {
                 selector: #selector(rtmpPublishHandler(_:)),
                 observer: self
             )
-            DispatchQueue.main.async {
-                self.isStarting  = false
-                self.isStreaming = true
-                self.streamStartCompletion?(true, nil)
-                self.streamStartCompletion = nil
-                self.pendingStreamKey = nil
-            }
+            isStarting  = false
+            isStreaming = true
+            let completion = streamStartCompletion
+            streamStartCompletion = nil
+            pendingStreamKey = nil
+            completion?(true, nil)
         } else if code.contains("Error") || code.contains("Bad") || code.contains("Rejected") || code.contains("Denied") {
-            connectTimeoutItem?.cancel()
-            connectTimeoutItem = nil
-            rtmpStream?.removeEventListener(
-                .rtmpStatus,
-                selector: #selector(rtmpPublishHandler(_:)),
-                observer: self
-            )
-            DispatchQueue.main.async {
-                self.isStarting  = false
-                self.isStreaming = false
-                self.streamStartCompletion?(false, "串流發布失敗: \(code)")
-                self.streamStartCompletion = nil
-                self.pendingStreamKey = nil
-            }
+            failStart("串流發布失敗: \(code)")
         }
     }
 

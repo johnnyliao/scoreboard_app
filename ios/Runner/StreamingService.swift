@@ -126,6 +126,19 @@ class StreamingService: NSObject {
                     self.confettiParticles = []
                     self.overlayLock.unlock()
 
+                    // If setupCapture() ran before permission was granted (first launch),
+                    // camera input was never added — add it now.
+                    if self.captureSession.inputs.isEmpty {
+                        self.captureSession.beginConfiguration()
+                        if let cam = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+                           let input = try? AVCaptureDeviceInput(device: cam),
+                           self.captureSession.canAddInput(input) {
+                            self.captureSession.addInput(input)
+                        }
+                        self.captureSession.commitConfiguration()
+                        self.videoOutput.connection(with: .video)?.videoOrientation = .landscapeRight
+                    }
+
                     if !self.captureSession.isRunning {
                         DispatchQueue.global(qos: .userInitiated).async {
                             self.captureSession.startRunning()

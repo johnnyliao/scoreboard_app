@@ -5,7 +5,6 @@ import 'package:share_plus/share_plus.dart';
 import 'youtube_service.dart';
 
 const _streamChannel = MethodChannel('com.scoreboard/streaming');
-const _rtmpBase = 'rtmp://a.rtmp.youtube.com/live2';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();

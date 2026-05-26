@@ -25,6 +25,7 @@ class CameraPreviewView: NSObject, FlutterPlatformView {
         super.init()
 
         if let preview = streamingService.previewView {
+            preview.removeFromSuperview()  // detach from any previous container before re-parenting
             preview.frame = containerView.bounds
             preview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             containerView.addSubview(preview)

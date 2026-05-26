@@ -198,8 +198,12 @@ class StreamingService: NSObject {
     // Called on main thread after audio permission confirmed.
     private func attachAudioIfNeeded() {
         guard !audioAttached else { return }
-        rtmpStream?.attachAudio(AVCaptureDevice.default(for: .audio)) { _, _ in }
-        audioAttached = true
+        audioAttached = true  // set before async callback to prevent re-entry
+        rtmpStream?.attachAudio(AVCaptureDevice.default(for: .audio)) { [weak self] error, _ in
+            guard error != nil else { return }
+            // Attachment failed — reset so the next startStream() can retry
+            DispatchQueue.main.async { self?.audioAttached = false }
+        }
     }
 
     // Must be called on main thread. Tears down everything and reports failure to Flutter.

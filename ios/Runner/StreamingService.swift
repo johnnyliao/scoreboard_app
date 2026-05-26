@@ -125,8 +125,8 @@ class StreamingService: NSObject {
         let stream = RTMPStream(connection: rtmpConnection)
 
         var videoSettings = VideoCodecSettings()
-        videoSettings.videoSize = CGSize(width: 1920, height: 1080)
-        videoSettings.bitRate = 4_500_000
+        videoSettings.videoSize = CGSize(width: 1280, height: 720)
+        videoSettings.bitRate = 2_500_000
         stream.videoSettings = videoSettings
 
         var audioSettings = AudioCodecSettings()
@@ -158,7 +158,7 @@ class StreamingService: NSObject {
     }
 
     func updateScore(homeName: String, homeScore: Int, awayName: String, awayScore: Int) {
-        let size = CGSize(width: 1920, height: 1080)
+        let size = CGSize(width: 1280, height: 720)
         let overlay = makeScoreOverlay(
             homeName: homeName,
             homeScore: homeScore,
@@ -365,7 +365,7 @@ class StreamingService: NSObject {
         let particles: [Particle] = (0..<40).map { _ in
             let c = colors[Int.random(in: 0..<colors.count)]
             return Particle(
-                x0: CGFloat.random(in: 0...1920),
+                x0: CGFloat.random(in: 0...1280),
                 y0: -CGFloat.random(in: 0...500),
                 vx: CGFloat.random(in: -120...120),
                 vy: CGFloat.random(in: 180...520),

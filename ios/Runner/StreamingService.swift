@@ -38,9 +38,13 @@ class StreamingService: NSObject {
     private var streamStartCompletion: ((Bool, String?) -> Void)?
     private var connectTimeoutItem: DispatchWorkItem?
 
-    // Double-tap guard — main thread only
+    // Double-tap / stale-closure guard — main thread only
     private var isStarting  = false
     private var isStreaming = false
+    private var startToken  = UUID()
+
+    // Audio attachment — deferred until permission is confirmed
+    private var audioAttached = false
 
     // ── Particle ──────────────────────────────────────────────
     private struct Particle {
@@ -93,8 +97,6 @@ class StreamingService: NSObject {
         audioSettings.bitRate = 128 * 1000
         stream.audioSettings = audioSettings
 
-        stream.attachAudio(AVCaptureDevice.default(for: .audio)) { _, _ in }
-
         let preview = MTHKView(frame: .zero)
         preview.videoGravity = .resizeAspectFill
         preview.attachStream(stream)
@@ -123,6 +125,8 @@ class StreamingService: NSObject {
             completion(false, "直播已在啟動中")
             return
         }
+        let token = UUID()
+        startToken = token
         isStarting = true
         streamStartCompletion = completion  // set early so failStart can reach it from any path
 
@@ -160,6 +164,9 @@ class StreamingService: NSObject {
                     }
 
                     DispatchQueue.main.async {
+                        guard self.isStarting && self.startToken == token else { return }
+
+                        self.attachAudioIfNeeded()
                         self.pendingStreamKey = key
 
                         self.rtmpConnection.addEventListener(
@@ -180,6 +187,13 @@ class StreamingService: NSObject {
                 }
             }
         }
+    }
+
+    // Called on main thread after audio permission confirmed.
+    private func attachAudioIfNeeded() {
+        guard !audioAttached else { return }
+        rtmpStream?.attachAudio(AVCaptureDevice.default(for: .audio)) { _, _ in }
+        audioAttached = true
     }
 
     // Must be called on main thread. Tears down everything and reports failure to Flutter.
@@ -281,6 +295,7 @@ class StreamingService: NSObject {
     func stopStream(completion: @escaping () -> Void) {
         isStarting  = false
         isStreaming = false
+        startToken  = UUID()  // invalidate any in-flight startStream closure
 
         connectTimeoutItem?.cancel()
         connectTimeoutItem = nil

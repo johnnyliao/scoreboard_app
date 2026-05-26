@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -50,6 +52,13 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   String? _watchUrl;
   String? _broadcastId;
 
+  // Status bar
+  final _battery = Battery();
+  Timer? _clockTimer;
+  Timer? _batteryTimer;
+  int _batteryLevel = -1;
+  DateTime? _streamStartTime;
+
   late final TextEditingController _titleCtrl;
 
   @override
@@ -61,6 +70,18 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
           'Live Scoreboard ${now.year}/${now.month.toString().padLeft(2, '0')}/${now.day.toString().padLeft(2, '0')}',
     );
     _tryRestoreSignIn();
+    _fetchBattery();
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+    _batteryTimer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchBattery());
+  }
+
+  Future<void> _fetchBattery() async {
+    try {
+      final level = await _battery.batteryLevel;
+      if (mounted) setState(() => _batteryLevel = level);
+    } catch (_) {}
   }
 
   Future<void> _tryRestoreSignIn() async {
@@ -70,6 +91,8 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
 
   @override
   void dispose() {
+    _clockTimer?.cancel();
+    _batteryTimer?.cancel();
     _titleCtrl.dispose();
     super.dispose();
   }
@@ -133,6 +156,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
         _watchUrl = live.watchUrl;
         _broadcastId = live.broadcastId;
         _loadingStatus = '';
+        _streamStartTime = DateTime.now();
       });
       _syncScore();
     } on PlatformException catch (e) {
@@ -156,6 +180,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
         _showCamera = false;
         _watchUrl = null;
         _broadcastId = null;
+        _streamStartTime = null;
       });
     } catch (e) {
       _showError('停止失敗: $e');
@@ -242,6 +267,60 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
     );
   }
 
+  // ── Status bar ────────────────────────────────────────────
+
+  Widget _buildStatusBar() {
+    final now = DateTime.now();
+    final timeStr =
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+
+    final chips = <Widget>[];
+
+    if (_isStreaming && _streamStartTime != null) {
+      final elapsed = now.difference(_streamStartTime!);
+      final h = elapsed.inHours.toString().padLeft(2, '0');
+      final m = (elapsed.inMinutes % 60).toString().padLeft(2, '0');
+      final s = (elapsed.inSeconds % 60).toString().padLeft(2, '0');
+      chips.add(_statusChip(Icons.radio_button_checked, '$h:$m:$s', Colors.redAccent));
+      chips.add(const SizedBox(width: 16));
+    }
+
+    chips.add(_statusChip(Icons.access_time, timeStr, Colors.white60));
+
+    if (_batteryLevel >= 0) {
+      chips.add(const SizedBox(width: 16));
+      final IconData batteryIcon;
+      if (_batteryLevel > 80) {
+        batteryIcon = Icons.battery_full;
+      } else if (_batteryLevel > 50) {
+        batteryIcon = Icons.battery_5_bar;
+      } else if (_batteryLevel > 20) {
+        batteryIcon = Icons.battery_3_bar;
+      } else {
+        batteryIcon = Icons.battery_1_bar;
+      }
+      final batteryColor = _batteryLevel > 20 ? Colors.white60 : Colors.red;
+      chips.add(_statusChip(batteryIcon, '$_batteryLevel%', batteryColor));
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      color: Colors.black38,
+      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: chips),
+    );
+  }
+
+  Widget _statusChip(IconData icon, String label, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: color, size: 12),
+        const SizedBox(width: 3),
+        Text(label, style: TextStyle(color: color, fontSize: 11)),
+      ],
+    );
+  }
+
   // ── Build ──────────────────────────────────────────────────
 
   @override
@@ -261,6 +340,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
           SafeArea(
             child: Column(
               children: [
+                _buildStatusBar(),
                 _TopBar(
                   account: _account,
                   isStreaming: _isStreaming,

@@ -19,8 +19,10 @@ jobs:
           git clone https://github.com/flutter/flutter.git --depth 1 -b 3.32.1 $HOME/flutter
           echo "$HOME/flutter/bin" >> $GITHUB_PATH
 
-      - name: Verify Flutter
-        run: flutter --version
+      - name: Verify Flutter & precache iOS engine
+        run: |
+          flutter --version
+          flutter precache --ios
 
       - name: Install dependencies
         run: flutter pub get

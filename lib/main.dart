@@ -161,10 +161,10 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       });
       _syncScore();
     } on PlatformException catch (e) {
-      if (live != null) await YouTubeService.stopBroadcast(live.broadcastId);
+      if (live != null) await YouTubeService.deleteBroadcast(live.broadcastId);
       _showError(e.message ?? '推流失敗');
     } catch (e) {
-      if (live != null) await YouTubeService.stopBroadcast(live.broadcastId);
+      if (live != null) await YouTubeService.deleteBroadcast(live.broadcastId);
       _showError('$e');
     } finally {
       if (mounted) setState(() { _isLoading = false; _loadingStatus = ''; });

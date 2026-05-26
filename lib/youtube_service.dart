@@ -65,42 +65,46 @@ class YouTubeService {
     _check(bRes, '建立直播活動失敗');
     final bId = (jsonDecode(bRes.body) as Map)['id'] as String;
 
-    // 2. 建立 liveStream
-    final sRes = await http.post(
-      Uri.parse('$_apiBase/liveStreams?part=snippet,cdn,contentDetails'),
-      headers: headers,
-      body: jsonEncode({
-        'snippet': {'title': title},
-        'cdn': {
-          'frameRate': '30fps',
-          'ingestionType': 'rtmp',
-          'resolution': '1080p',
-        },
-        'contentDetails': {'isReusable': false},
-      }),
-    );
-    _check(sRes, '建立串流失敗');
-    final sBody = jsonDecode(sRes.body) as Map;
-    final sId = sBody['id'] as String;
-    final ingestion = sBody['cdn']['ingestionInfo'] as Map;
-    final rtmpUrl = ingestion['ingestionAddress'] as String;
-    final streamKey = ingestion['streamName'] as String;
+    // 2 & 3: 建立 liveStream 和 bind — 若任一步失敗，刪除已建立的 broadcast
+    try {
+      final sRes = await http.post(
+        Uri.parse('$_apiBase/liveStreams?part=snippet,cdn,contentDetails'),
+        headers: headers,
+        body: jsonEncode({
+          'snippet': {'title': title},
+          'cdn': {
+            'frameRate': '30fps',
+            'ingestionType': 'rtmp',
+            'resolution': '1080p',
+          },
+          'contentDetails': {'isReusable': false},
+        }),
+      );
+      _check(sRes, '建立串流失敗');
+      final sBody = jsonDecode(sRes.body) as Map;
+      final sId = sBody['id'] as String;
+      final ingestion = sBody['cdn']['ingestionInfo'] as Map;
+      final rtmpUrl = ingestion['ingestionAddress'] as String;
+      final streamKey = ingestion['streamName'] as String;
 
-    // 3. 綁定 broadcast ↔ stream
-    final bindRes = await http.post(
-      Uri.parse(
-          '$_apiBase/liveBroadcasts/bind?id=$bId&part=id,contentDetails&streamId=$sId'),
-      headers: {'Authorization': 'Bearer $token'},
-    );
-    _check(bindRes, '綁定串流失敗');
+      final bindRes = await http.post(
+        Uri.parse(
+            '$_apiBase/liveBroadcasts/bind?id=$bId&part=id,contentDetails&streamId=$sId'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      _check(bindRes, '綁定串流失敗');
 
-    return LiveSetupResult(
-      broadcastId: bId,
-      streamId: sId,
-      rtmpUrl: rtmpUrl,
-      streamKey: streamKey,
-      watchUrl: 'https://www.youtube.com/watch?v=$bId',
-    );
+      return LiveSetupResult(
+        broadcastId: bId,
+        streamId: sId,
+        rtmpUrl: rtmpUrl,
+        streamKey: streamKey,
+        watchUrl: 'https://www.youtube.com/watch?v=$bId',
+      );
+    } catch (_) {
+      await deleteBroadcast(bId);
+      rethrow;
+    }
   }
 
   /// 查詢 liveStream 目前的 streamStatus
@@ -145,6 +149,17 @@ class YouTubeService {
       await http.post(
         Uri.parse('$_apiBase/liveBroadcasts/transition'
             '?broadcastStatus=complete&id=$broadcastId&part=status'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+    } catch (_) {}
+  }
+
+  /// 刪除從未開播的直播活動（建立失敗時清理垃圾用）
+  static Future<void> deleteBroadcast(String broadcastId) async {
+    try {
+      final token = await _token();
+      await http.delete(
+        Uri.parse('$_apiBase/liveBroadcasts?id=$broadcastId'),
         headers: {'Authorization': 'Bearer $token'},
       );
     } catch (_) {}

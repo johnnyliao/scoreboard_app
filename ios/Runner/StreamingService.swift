@@ -248,8 +248,10 @@ class StreamingService: NSObject {
 
     private func handleRtmpConnect(_ notification: Notification) {
         let event = Event.from(notification)
-        guard let data = event.data as? [String: Any?],
-              let code = data["code"] as? String else { return }
+        // HaishinKit 1.9.x stores event data as [String: Any] (not [String: Any?]).
+        // Also try notification.userInfo in case the data is dispatched there instead.
+        guard let code = (event.data as? [String: Any])?["code"] as? String
+                      ?? notification.userInfo?["code"] as? String else { return }
 
         if code == "NetConnection.Connect.Success" {
             rtmpConnection.removeEventListener(
@@ -279,8 +281,8 @@ class StreamingService: NSObject {
 
     private func handleRtmpPublish(_ notification: Notification) {
         let event = Event.from(notification)
-        guard let data = event.data as? [String: Any?],
-              let code = data["code"] as? String else { return }
+        guard let code = (event.data as? [String: Any])?["code"] as? String
+                      ?? notification.userInfo?["code"] as? String else { return }
 
         if code == "NetStream.Publish.Start" {
             connectTimeoutItem?.cancel()

@@ -1,5 +1,6 @@
 import Flutter
 import UIKit
+import AVFoundation
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
@@ -9,6 +10,8 @@ import UIKit
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
+        configureAudioSession()
+
         let service = StreamingService()
         streamingService = service
 
@@ -80,5 +83,19 @@ import UIKit
         }
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    }
+
+    private func configureAudioSession() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(
+                .playAndRecord,
+                mode: .default,
+                options: [.defaultToSpeaker, .allowBluetooth]
+            )
+            try session.setActive(true)
+        } catch {
+            NSLog("Failed to configure AVAudioSession: %@", error.localizedDescription)
+        }
     }
 }

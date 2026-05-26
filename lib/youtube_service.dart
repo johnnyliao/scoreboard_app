@@ -84,7 +84,9 @@ class YouTubeService {
       final sBody = jsonDecode(sRes.body) as Map;
       final sId = sBody['id'] as String;
       final ingestion = sBody['cdn']['ingestionInfo'] as Map;
-      final rtmpUrl = ingestion['ingestionAddress'] as String;
+      final rtmpUrl =
+          (ingestion['rtmpsIngestionAddress'] as String?) ??
+          (ingestion['ingestionAddress'] as String);
       final streamKey = ingestion['streamName'] as String;
 
       final bindRes = await http.post(

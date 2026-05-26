@@ -26,7 +26,6 @@ class StreamingService: NSObject {
     // Score overlay — main thread writes, capture queue reads
     private let overlayLock = NSLock()
     private var cachedOverlay: CIImage?
-    private var overlaySize: CGSize = .zero
 
     // Celebration state — same lock
     private var celebrationStart: Date?
@@ -113,7 +112,6 @@ class StreamingService: NSObject {
                                        awayName: awayName, awayScore: awayScore, size: size)
         overlayLock.lock()
         cachedOverlay = overlay
-        overlaySize = size
         overlayLock.unlock()
     }
 

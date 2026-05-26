@@ -135,8 +135,9 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       return;
     }
     setState(() { _isLoading = true; _loadingStatus = '建立直播活動…'; });
+    LiveSetupResult? live;
     try {
-      final live = await YouTubeService.setupLive(title: title);
+      live = await YouTubeService.setupLive(title: title);
 
       if (mounted) setState(() => _loadingStatus = '連接 RTMP…');
       await _streamChannel.invokeMethod('startStream', {
@@ -153,15 +154,17 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       setState(() {
         _isStreaming = true;
         _showCamera = true;
-        _watchUrl = live.watchUrl;
+        _watchUrl = live!.watchUrl;
         _broadcastId = live.broadcastId;
         _loadingStatus = '';
         _streamStartTime = DateTime.now();
       });
       _syncScore();
     } on PlatformException catch (e) {
+      if (live != null) await YouTubeService.stopBroadcast(live.broadcastId);
       _showError(e.message ?? '推流失敗');
     } catch (e) {
+      if (live != null) await YouTubeService.stopBroadcast(live.broadcastId);
       _showError('$e');
     } finally {
       if (mounted) setState(() { _isLoading = false; _loadingStatus = ''; });

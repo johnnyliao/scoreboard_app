@@ -11,10 +11,12 @@ class StreamingService: NSObject {
     private(set) var previewView: UIView?
 
     // ── Camera pipeline (we own this, not HaishinKit) ─────────
-    private let captureSession = AVCaptureSession()
-    private let videoOutput    = AVCaptureVideoDataOutput()
-    private let captureQueue   = DispatchQueue(label: "com.scoreboard.capture", qos: .userInitiated)
-    private let ciContext       = CIContext(options: [.workingColorSpace: NSNull()])
+    private let captureSession  = AVCaptureSession()
+    private let videoOutput     = AVCaptureVideoDataOutput()
+    private let captureQueue    = DispatchQueue(label: "com.scoreboard.capture", qos: .userInitiated)
+    private let sessionQueue    = DispatchQueue(label: "com.scoreboard.session",  qos: .userInitiated)
+    private let ciContext        = CIContext(options: [.workingColorSpace: NSNull()])
+    private var captureConfigured = false
 
     // Cached per-frame CIFilter objects
     private let compositeFilter = CIFilter(name: "CISourceOverCompositing")!
@@ -31,10 +33,14 @@ class StreamingService: NSObject {
     private let celebrationDuration: TimeInterval = 3.0
     private var confettiParticles: [Particle] = []
 
-    // RTMP connection state
+    // RTMP connection state — main thread only
     private var pendingStreamKey: String?
     private var streamStartCompletion: ((Bool, String?) -> Void)?
     private var connectTimeoutItem: DispatchWorkItem?
+
+    // Double-tap guard — main thread only
+    private var isStarting  = false
+    private var isStreaming = false
 
     // ── Particle ──────────────────────────────────────────────
     private struct Particle {
@@ -47,12 +53,13 @@ class StreamingService: NSObject {
 
     override init() {
         super.init()
-        setupCapture()
         setupStream()
+        // Camera is set up lazily in startStream() after permissions are confirmed.
     }
 
     // MARK: - Setup
 
+    // Must be called from sessionQueue.
     private func setupCapture() {
         captureSession.beginConfiguration()
         captureSession.sessionPreset = .hd1920x1080
@@ -71,10 +78,7 @@ class StreamingService: NSObject {
             videoOutput.connection(with: .video)?.videoOrientation = .landscapeRight
         }
         captureSession.commitConfiguration()
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            self.captureSession.startRunning()
-        }
+        captureConfigured = true
     }
 
     private func setupStream() {
@@ -113,22 +117,36 @@ class StreamingService: NSObject {
 
     // MARK: - Stream control
 
+    // Called on main thread from AppDelegate / platform channel.
     func startStream(url: String, key: String, completion: @escaping (Bool, String?) -> Void) {
+        guard !isStarting && !isStreaming else {
+            completion(false, "直播已在啟動中")
+            return
+        }
+        isStarting = true
+
+        overlayLock.lock()
+        celebrationStart = nil
+        confettiParticles = []
+        overlayLock.unlock()
+
         AVCaptureDevice.requestAccess(for: .video) { [weak self] videoOk in
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] audioOk in
                 guard let self else { return }
                 guard videoOk && audioOk else {
-                    completion(false, "需要攝影機和麥克風權限"); return
+                    DispatchQueue.main.async {
+                        self.isStarting = false
+                        completion(false, "需要攝影機和麥克風權限")
+                    }
+                    return
                 }
-                DispatchQueue.main.async {
-                    self.overlayLock.lock()
-                    self.celebrationStart = nil
-                    self.confettiParticles = []
-                    self.overlayLock.unlock()
 
-                    // If setupCapture() ran before permission was granted (first launch),
-                    // camera input was never added — add it now.
-                    if self.captureSession.inputs.isEmpty {
+                // All AVCaptureSession work runs on sessionQueue.
+                self.sessionQueue.async {
+                    if !self.captureConfigured {
+                        self.setupCapture()
+                    } else if self.captureSession.inputs.isEmpty {
+                        // First launch: permission granted after setupCapture ran — add input now.
                         self.captureSession.beginConfiguration()
                         if let cam = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
                            let input = try? AVCaptureDeviceInput(device: cam),
@@ -140,40 +158,42 @@ class StreamingService: NSObject {
                     }
 
                     if !self.captureSession.isRunning {
-                        DispatchQueue.global(qos: .userInitiated).async {
-                            self.captureSession.startRunning()
-                        }
+                        self.captureSession.startRunning()
                     }
 
-                    self.pendingStreamKey = key
-                    self.streamStartCompletion = completion
+                    DispatchQueue.main.async {
+                        self.pendingStreamKey = key
+                        self.streamStartCompletion = completion
 
-                    self.rtmpConnection.addEventListener(
-                        .rtmpStatus,
-                        selector: #selector(self.rtmpConnectHandler(_:)),
-                        observer: self
-                    )
-
-                    let timeout = DispatchWorkItem { [weak self] in
-                        guard let self, self.streamStartCompletion != nil else { return }
-                        self.rtmpConnection.removeEventListener(
+                        self.rtmpConnection.addEventListener(
                             .rtmpStatus,
                             selector: #selector(self.rtmpConnectHandler(_:)),
                             observer: self
                         )
-                        self.rtmpStream?.removeEventListener(
-                            .rtmpStatus,
-                            selector: #selector(self.rtmpPublishHandler(_:)),
-                            observer: self
-                        )
-                        self.streamStartCompletion?(false, "RTMP 連線逾時，請確認網路")
-                        self.streamStartCompletion = nil
-                        self.pendingStreamKey = nil
-                    }
-                    self.connectTimeoutItem = timeout
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
 
-                    self.rtmpConnection.connect(url)
+                        let timeout = DispatchWorkItem { [weak self] in
+                            guard let self, self.streamStartCompletion != nil else { return }
+                            self.rtmpConnection.removeEventListener(
+                                .rtmpStatus,
+                                selector: #selector(self.rtmpConnectHandler(_:)),
+                                observer: self
+                            )
+                            self.rtmpStream?.removeEventListener(
+                                .rtmpStatus,
+                                selector: #selector(self.rtmpPublishHandler(_:)),
+                                observer: self
+                            )
+                            self.isStarting  = false
+                            self.isStreaming = false
+                            self.streamStartCompletion?(false, "RTMP 連線逾時，請確認網路")
+                            self.streamStartCompletion = nil
+                            self.pendingStreamKey = nil
+                        }
+                        self.connectTimeoutItem = timeout
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
+
+                        self.rtmpConnection.connect(url)
+                    }
                 }
             }
         }
@@ -191,7 +211,6 @@ class StreamingService: NSObject {
                 selector: #selector(rtmpConnectHandler(_:)),
                 observer: self
             )
-            // Step 2: listen for publish acceptance from the stream object
             rtmpStream?.addEventListener(
                 .rtmpStatus,
                 selector: #selector(rtmpPublishHandler(_:)),
@@ -207,6 +226,8 @@ class StreamingService: NSObject {
                 observer: self
             )
             DispatchQueue.main.async {
+                self.isStarting  = false
+                self.isStreaming = false
                 self.streamStartCompletion?(false, "RTMP 連線失敗: \(code)")
                 self.streamStartCompletion = nil
                 self.pendingStreamKey = nil
@@ -229,6 +250,8 @@ class StreamingService: NSObject {
                 observer: self
             )
             DispatchQueue.main.async {
+                self.isStarting  = false
+                self.isStreaming = true
                 self.streamStartCompletion?(true, nil)
                 self.streamStartCompletion = nil
                 self.pendingStreamKey = nil
@@ -242,6 +265,8 @@ class StreamingService: NSObject {
                 observer: self
             )
             DispatchQueue.main.async {
+                self.isStarting  = false
+                self.isStreaming = false
                 self.streamStartCompletion?(false, "串流發布失敗: \(code)")
                 self.streamStartCompletion = nil
                 self.pendingStreamKey = nil
@@ -249,11 +274,16 @@ class StreamingService: NSObject {
         }
     }
 
+    // Called on main thread from AppDelegate / platform channel.
     func stopStream(completion: @escaping () -> Void) {
+        isStarting  = false
+        isStreaming = false
+
         connectTimeoutItem?.cancel()
         connectTimeoutItem = nil
         streamStartCompletion = nil
         pendingStreamKey = nil
+
         rtmpConnection.removeEventListener(
             .rtmpStatus,
             selector: #selector(rtmpConnectHandler(_:)),
@@ -266,14 +296,21 @@ class StreamingService: NSObject {
         )
         rtmpStream?.close()
         rtmpConnection.close()
+
         overlayLock.lock()
         celebrationStart = nil
         confettiParticles = []
         overlayLock.unlock()
-        DispatchQueue.global(qos: .userInitiated).async {
-            self.captureSession.stopRunning()
+
+        // Wait for session to fully stop before signalling Flutter.
+        sessionQueue.async {
+            if self.captureSession.isRunning {
+                self.captureSession.stopRunning()
+            }
+            DispatchQueue.main.async {
+                completion()
+            }
         }
-        completion()
     }
 
     // MARK: - Goal celebration

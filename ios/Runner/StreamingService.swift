@@ -339,7 +339,7 @@ class StreamingService: NSObject {
             (0.20, 0.85, 0.35), (1.0, 0.50, 0.10), (0.88, 0.25, 0.90),
             (1.0, 1.0, 1.0),   (0.10, 0.90, 0.90), (1.0, 0.60, 0.80),
         ]
-        let particles: [Particle] = (0..<100).map { _ in
+        let particles: [Particle] = (0..<40).map { _ in
             let c = colors[Int.random(in: 0..<colors.count)]
             return Particle(
                 x0:   CGFloat.random(in: 0...1920),

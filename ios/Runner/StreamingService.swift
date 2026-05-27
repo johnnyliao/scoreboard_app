@@ -4,6 +4,7 @@ import AVFoundation
 import UIKit
 import CoreImage
 import CoreText
+import VideoToolbox
 
 final class ScoreboardOverlayEffect: VideoEffect {
     private weak var service: StreamingService?
@@ -123,16 +124,18 @@ class StreamingService: NSObject {
         let stream = RTMPStream(connection: rtmpConnection)
         stream.sessionPreset = .hd1920x1080  // must come before frameRate
         stream.frameRate = 30
-        // ISOLATION TEST (build 1): pure 1080p passthrough, NO overlay.
-        // Goal: prove whether 1080p itself reaches YouTube, separate from the
-        // offscreen overlay pipeline. mode stays .passthrough (default) ->
-        // camera frames go straight to the encoder, no screen compositing.
-        // Once confirmed, build 2 re-adds the score overlay via manual
-        // stream.append() compositing (does NOT need offscreen).
+        stream.videoMixerSettings.mode = .offscreen  // required for the score VideoEffect
 
         var videoSettings = VideoCodecSettings()
         videoSettings.videoSize = CGSize(width: 1920, height: 1080)
-        videoSettings.bitRate = 4_500_000  // moderate, removes bandwidth as a variable
+        // ROOT CAUSE FIX: HaishinKit's default profileLevel is
+        // kVTProfileLevel_H264_Baseline_3_1, whose max frame size is 1280x720.
+        // 1920x1080 exceeds Level 3.1 -> VTCompressionSession silently emits no
+        // frames -> YouTube receives no data. High profile + AutoLevel lets
+        // VideoToolbox pick level 4.0+, which supports 1080p (YouTube's
+        // recommended profile for 1080p).
+        videoSettings.profileLevel = kVTProfileLevel_H264_High_AutoLevel as String
+        videoSettings.bitRate = 4_500_000
         videoSettings.maxKeyFrameIntervalDuration = 2
         stream.videoSettings = videoSettings
 
@@ -140,8 +143,9 @@ class StreamingService: NSObject {
         audioSettings.bitRate = 128 * 1000
         stream.audioSettings = audioSettings
 
-        // No screen.startRunning(), no registerVideoEffect() — those require
-        // .offscreen, which is the suspected cause of YouTube "no data".
+        stream.screen.size = CGSize(width: 1920, height: 1080)
+        stream.screen.startRunning()  // activates offscreen compositing for the VideoEffect
+        stream.registerVideoEffect(ScoreboardOverlayEffect(service: self))
 
         let preview = MTHKView(frame: .zero)
         preview.videoGravity = .resizeAspectFill

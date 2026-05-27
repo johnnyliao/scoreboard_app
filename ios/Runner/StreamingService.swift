@@ -78,6 +78,9 @@ class StreamingService: NSObject {
     fileprivate let celebrationDuration: TimeInterval = 3.0
     fileprivate var confettiParticles: [Particle] = []
 
+    private var celebrationBuffer: UnsafeMutableRawPointer?
+    private var celebrationFrameSize: CGSize = .zero
+
     private var pendingStreamKey: String?
     private var streamStartCompletion: ((Bool, String?) -> Void)?
     private var connectTimeoutItem: DispatchWorkItem?
@@ -106,6 +109,10 @@ class StreamingService: NSObject {
         setupStream()
     }
 
+    deinit {
+        if let buf = celebrationBuffer { free(buf) }
+    }
+
     private func debug(_ message: String) {
         DispatchQueue.main.async { [weak self] in
             self?.onDebugMessage?(message)
@@ -115,9 +122,8 @@ class StreamingService: NSObject {
     private func setupStream() {
         let stream = RTMPStream(connection: rtmpConnection)
         stream.frameRate = 30
-        stream.configuration { session in
-            session.sessionPreset = .hd1920x1080
-        }
+        stream.sessionPreset = .hd1920x1080
+        stream.videoMixerSettings.mode = .offscreen
 
         var videoSettings = VideoCodecSettings()
         videoSettings.videoSize = CGSize(width: 1920, height: 1080)
@@ -262,6 +268,7 @@ class StreamingService: NSObject {
         let completion = streamStartCompletion
         isStarting = false
         isStreaming = false
+        devicesAttached = false
         streamStartCompletion = nil
         pendingStreamKey = nil
 
@@ -442,8 +449,18 @@ class StreamingService: NSObject {
         frameW: Int,
         frameH: Int
     ) -> CIImage? {
+        let needed = frameW * frameH * 4
+        let targetSize = CGSize(width: frameW, height: frameH)
+        if celebrationBuffer == nil || celebrationFrameSize != targetSize {
+            if let old = celebrationBuffer { free(old) }
+            celebrationBuffer = malloc(needed)
+            celebrationFrameSize = targetSize
+        }
+        guard let buf = celebrationBuffer else { return nil }
+        memset(buf, 0, needed)
+
         guard let ctx = CGContext(
-            data: nil,
+            data: buf,
             width: frameW,
             height: frameH,
             bitsPerComponent: 8,

@@ -181,6 +181,15 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       if (live != null) await YouTubeService.deleteBroadcast(live.broadcastId);
       _showError('$e');
     } finally {
+      // If start did not fully succeed, the native side may have already
+      // begun publishing (isStreaming=true) before a later step (e.g.
+      // waitUntilStreamActive) threw. Reset it so the next 開始直播 isn't
+      // blocked by "already starting or streaming".
+      if (!_isStreaming) {
+        try {
+          await _streamChannel.invokeMethod('stopStream');
+        } catch (_) {}
+      }
       if (mounted) setState(() { _isLoading = false; _loadingStatus = ''; });
     }
   }

@@ -123,11 +123,16 @@ class StreamingService: NSObject {
         let stream = RTMPStream(connection: rtmpConnection)
         stream.sessionPreset = .hd1920x1080  // must come before frameRate
         stream.frameRate = 30
-        stream.videoMixerSettings.mode = .offscreen
+        // ISOLATION TEST (build 1): pure 1080p passthrough, NO overlay.
+        // Goal: prove whether 1080p itself reaches YouTube, separate from the
+        // offscreen overlay pipeline. mode stays .passthrough (default) ->
+        // camera frames go straight to the encoder, no screen compositing.
+        // Once confirmed, build 2 re-adds the score overlay via manual
+        // stream.append() compositing (does NOT need offscreen).
 
         var videoSettings = VideoCodecSettings()
         videoSettings.videoSize = CGSize(width: 1920, height: 1080)
-        videoSettings.bitRate = 8_000_000
+        videoSettings.bitRate = 4_500_000  // moderate, removes bandwidth as a variable
         videoSettings.maxKeyFrameIntervalDuration = 2
         stream.videoSettings = videoSettings
 
@@ -135,9 +140,8 @@ class StreamingService: NSObject {
         audioSettings.bitRate = 128 * 1000
         stream.audioSettings = audioSettings
 
-        stream.screen.size = CGSize(width: 1920, height: 1080)
-        stream.screen.startRunning()  // required to activate offscreen compositing for VideoEffect
-        stream.registerVideoEffect(ScoreboardOverlayEffect(service: self))
+        // No screen.startRunning(), no registerVideoEffect() — those require
+        // .offscreen, which is the suspected cause of YouTube "no data".
 
         let preview = MTHKView(frame: .zero)
         preview.videoGravity = .resizeAspectFill

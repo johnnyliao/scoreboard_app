@@ -87,9 +87,6 @@ class StreamingService: NSObject {
     private var startToken = UUID()
     private var devicesAttached = false
 
-    private var celebrationBuffer: UnsafeMutableRawPointer?
-    private var celebrationFrameSize: CGSize = .zero
-
     fileprivate struct Particle {
         let x0: CGFloat
         let y0: CGFloat
@@ -107,12 +104,6 @@ class StreamingService: NSObject {
     override init() {
         super.init()
         setupStream()
-    }
-
-    deinit {
-        if let buf = celebrationBuffer {
-            free(buf)
-        }
     }
 
     private func debug(_ message: String) {
@@ -451,26 +442,12 @@ class StreamingService: NSObject {
         frameW: Int,
         frameH: Int
     ) -> CIImage? {
-        let bytesPerRow = frameW * 4
-        let bufferSize = frameH * bytesPerRow
-        let newSize = CGSize(width: frameW, height: frameH)
-
-        if celebrationBuffer == nil || celebrationFrameSize != newSize {
-            if let old = celebrationBuffer {
-                free(old)
-            }
-            celebrationBuffer = malloc(bufferSize)
-            celebrationFrameSize = newSize
-        }
-        guard let buffer = celebrationBuffer else { return nil }
-        memset(buffer, 0, bufferSize)
-
         guard let ctx = CGContext(
-            data: buffer,
+            data: nil,
             width: frameW,
             height: frameH,
             bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
+            bytesPerRow: frameW * 4,
             space: deviceRGB,
             bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue |
                 CGImageAlphaInfo.premultipliedFirst.rawValue

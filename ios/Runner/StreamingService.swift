@@ -121,8 +121,8 @@ class StreamingService: NSObject {
 
     private func setupStream() {
         let stream = RTMPStream(connection: rtmpConnection)
+        stream.sessionPreset = .hd1920x1080  // must come before frameRate
         stream.frameRate = 30
-        stream.sessionPreset = .hd1920x1080
         stream.videoMixerSettings.mode = .offscreen
 
         var videoSettings = VideoCodecSettings()
@@ -135,6 +135,8 @@ class StreamingService: NSObject {
         audioSettings.bitRate = 128 * 1000
         stream.audioSettings = audioSettings
 
+        stream.screen.size = CGSize(width: 1920, height: 1080)
+        stream.screen.startRunning()  // required to activate offscreen compositing for VideoEffect
         stream.registerVideoEffect(ScoreboardOverlayEffect(service: self))
 
         let preview = MTHKView(frame: .zero)

@@ -167,6 +167,10 @@ class StreamingService: NSObject {
 
         stream.attachCamera(camera)
         stream.attachAudio(mic)
+        // Force landscape capture so the stream isn't portrait. Set AFTER
+        // attachCamera so it applies to the live capture connection.
+        // (If the image comes out upside-down, switch to .landscapeLeft.)
+        stream.videoOrientation = .landscapeRight
     }
 
     func updateScore(homeName: String, homeScore: Int, awayName: String, awayScore: Int) {

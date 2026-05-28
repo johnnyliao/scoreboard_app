@@ -74,7 +74,8 @@ import AVFoundation
                     homeName: args["homeName"] as? String ?? "主隊",
                     homeScore: args["homeScore"] as? Int ?? 0,
                     awayName: args["awayName"] as? String ?? "客隊",
-                    awayScore: args["awayScore"] as? Int ?? 0
+                    awayScore: args["awayScore"] as? Int ?? 0,
+                    clock: args["clock"] as? String ?? ""
                 )
                 result(nil)
             case "triggerGoal":

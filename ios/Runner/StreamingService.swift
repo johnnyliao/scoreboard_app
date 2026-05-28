@@ -173,13 +173,20 @@ class StreamingService: NSObject {
         stream.videoOrientation = .landscapeRight
     }
 
-    func updateScore(homeName: String, homeScore: Int, awayName: String, awayScore: Int) {
+    func updateScore(
+        homeName: String,
+        homeScore: Int,
+        awayName: String,
+        awayScore: Int,
+        clock: String = ""
+    ) {
         let size = CGSize(width: 1920, height: 1080)
         let overlay = makeScoreOverlay(
             homeName: homeName,
             homeScore: homeScore,
             awayName: awayName,
             awayScore: awayScore,
+            clock: clock,
             size: size
         )
         overlayLock.lock()
@@ -401,60 +408,145 @@ class StreamingService: NSObject {
         overlayLock.unlock()
     }
 
+    /// Broadcast-style horizontal scoreboard bar, top-left of the 1920x1080 frame.
+    /// Layout (left → right):
+    ///   [ MM:SS ][ HOME NAME ][ H ][ A ][ AWAY NAME ]
+    /// Score cells are filled with team colors (blue home / red away); name cells
+    /// carry a thin colored accent stripe on the bottom edge.
     private func makeScoreOverlay(
         homeName: String,
         homeScore: Int,
         awayName: String,
         awayScore: Int,
+        clock: String,
         size: CGSize
     ) -> CIImage? {
-        let padding: CGFloat = 14
-        let lineGap: CGFloat = 6
-        let cornerRadius: CGFloat = 10
-        let offsetX: CGFloat = 20
-        let offsetY: CGFloat = 20
+        let originX: CGFloat = 40
+        let originY: CGFloat = 40
+        let barH: CGFloat = 66
+        let cellPadX: CGFloat = 20
+        let cornerRadius: CGFloat = 13
+        let accentH: CGFloat = 4
 
-        let nameFont = UIFont.systemFont(ofSize: 30, weight: .medium)
-        let scoreFont = UIFont.monospacedDigitSystemFont(ofSize: 30, weight: .bold)
+        // Match the Flutter team accent colors so UI and overlay stay consistent.
+        let homeColor = UIColor(red: 33.0/255.0, green: 150.0/255.0, blue: 243.0/255.0, alpha: 1) // #2196F3
+        let awayColor = UIColor(red: 229.0/255.0, green: 57.0/255.0, blue: 53.0/255.0, alpha: 1)  // #E53935
+        let barBG = UIColor(red: 0.04, green: 0.055, blue: 0.105, alpha: 0.86)                   // dark navy
+        let clockTint = UIColor(white: 0, alpha: 0.30)
+        let divider = UIColor(white: 1, alpha: 0.10)
+        let border = UIColor(white: 1, alpha: 0.08)
 
-        let line1 = scoreLine(name: homeName, score: homeScore, nameFont: nameFont, scoreFont: scoreFont)
-        let line2 = scoreLine(name: awayName, score: awayScore, nameFont: nameFont, scoreFont: scoreFont)
-        let sz1 = line1.size()
-        let sz2 = line2.size()
+        let nameFont = UIFont.systemFont(ofSize: 30, weight: .semibold)
+        let scoreFont = UIFont.monospacedDigitSystemFont(ofSize: 34, weight: .heavy)
+        let clockFont = UIFont.monospacedDigitSystemFont(ofSize: 30, weight: .bold)
+        let white = UIColor.white
 
-        let boxW = max(sz1.width, sz2.width) + padding * 2
-        let boxH = sz1.height + lineGap + sz2.height + padding * 2
-        let boxRect = CGRect(x: offsetX, y: offsetY, width: boxW, height: boxH)
+        let homeNameAttr = NSAttributedString(
+            string: homeName,
+            attributes: [.font: nameFont, .foregroundColor: white])
+        let awayNameAttr = NSAttributedString(
+            string: awayName,
+            attributes: [.font: nameFont, .foregroundColor: white])
+        let homeScoreAttr = NSAttributedString(
+            string: "\(homeScore)",
+            attributes: [.font: scoreFont, .foregroundColor: white])
+        let awayScoreAttr = NSAttributedString(
+            string: "\(awayScore)",
+            attributes: [.font: scoreFont, .foregroundColor: white])
+        let clockAttr = NSAttributedString(
+            string: clock.isEmpty ? "00:00" : clock,
+            attributes: [.font: clockFont, .foregroundColor: white])
+
+        let clockCellW = ceil(clockAttr.size().width) + cellPadX * 2
+        let homeNameCellW = ceil(homeNameAttr.size().width) + cellPadX * 2
+        let awayNameCellW = ceil(awayNameAttr.size().width) + cellPadX * 2
+        // Shared score-cell width keeps the center symmetric even when one side is 2-digit.
+        let scoreCellW = max(54, max(ceil(homeScoreAttr.size().width),
+                                     ceil(awayScoreAttr.size().width)) + 28)
+
+        let totalW = clockCellW + homeNameCellW + scoreCellW + scoreCellW + awayNameCellW
+        let barRect = CGRect(x: originX, y: originY, width: totalW, height: barH)
+        let barPath = UIBezierPath(roundedRect: barRect, cornerRadius: cornerRadius)
 
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         format.opaque = false
         let renderer = UIGraphicsImageRenderer(size: size, format: format)
-        let img = renderer.image { _ in
-            UIColor(red: 0, green: 0, blue: 0, alpha: 0.72).setFill()
-            UIBezierPath(roundedRect: boxRect, cornerRadius: cornerRadius).fill()
-            line1.draw(at: CGPoint(x: offsetX + padding, y: offsetY + padding))
-            line2.draw(at: CGPoint(x: offsetX + padding, y: offsetY + padding + sz1.height + lineGap))
+        let img = renderer.image { rc in
+            let ctx = rc.cgContext
+
+            // Bar background
+            barBG.setFill()
+            barPath.fill()
+
+            // Clip subsequent fills/text to the rounded bar
+            ctx.saveGState()
+            barPath.addClip()
+
+            var x = originX
+
+            // Clock cell (slight tint to distinguish)
+            let clockRect = CGRect(x: x, y: originY, width: clockCellW, height: barH)
+            clockTint.setFill()
+            ctx.fill(clockRect)
+            self.drawCentered(clockAttr, in: clockRect)
+            x += clockCellW
+
+            // Home name + blue bottom accent
+            let homeNameRect = CGRect(x: x, y: originY, width: homeNameCellW, height: barH)
+            self.drawCentered(homeNameAttr, in: homeNameRect)
+            homeColor.setFill()
+            ctx.fill(CGRect(x: x, y: originY + barH - accentH,
+                            width: homeNameCellW, height: accentH))
+            x += homeNameCellW
+
+            // Home score (blue cell, white bold)
+            let homeScoreRect = CGRect(x: x, y: originY, width: scoreCellW, height: barH)
+            homeColor.setFill()
+            ctx.fill(homeScoreRect)
+            self.drawCentered(homeScoreAttr, in: homeScoreRect)
+            x += scoreCellW
+
+            // Away score (red cell, white bold)
+            let awayScoreRect = CGRect(x: x, y: originY, width: scoreCellW, height: barH)
+            awayColor.setFill()
+            ctx.fill(awayScoreRect)
+            self.drawCentered(awayScoreAttr, in: awayScoreRect)
+            x += scoreCellW
+
+            // Away name + red bottom accent
+            let awayNameRect = CGRect(x: x, y: originY, width: awayNameCellW, height: barH)
+            self.drawCentered(awayNameAttr, in: awayNameRect)
+            awayColor.setFill()
+            ctx.fill(CGRect(x: x, y: originY + barH - accentH,
+                            width: awayNameCellW, height: accentH))
+
+            // Thin dividers at cell boundaries (over the colored cells too — subtle)
+            divider.setFill()
+            let boundaries: [CGFloat] = [
+                originX + clockCellW,
+                originX + clockCellW + homeNameCellW,
+                originX + clockCellW + homeNameCellW + scoreCellW,
+                originX + clockCellW + homeNameCellW + scoreCellW + scoreCellW,
+            ]
+            for bx in boundaries {
+                ctx.fill(CGRect(x: bx - 0.5, y: originY, width: 1, height: barH))
+            }
+
+            ctx.restoreGState()
+
+            // Crisp outer border
+            border.setStroke()
+            barPath.lineWidth = 1
+            barPath.stroke()
         }
         return CIImage(image: img)
     }
 
-    private func scoreLine(
-        name: String,
-        score: Int,
-        nameFont: UIFont,
-        scoreFont: UIFont
-    ) -> NSAttributedString {
-        let s = NSMutableAttributedString()
-        s.append(NSAttributedString(
-            string: "\(name)  ",
-            attributes: [.font: nameFont, .foregroundColor: UIColor(white: 0.85, alpha: 1)]
-        ))
-        s.append(NSAttributedString(
-            string: "\(score)",
-            attributes: [.font: scoreFont, .foregroundColor: UIColor.white]
-        ))
-        return s
+    private func drawCentered(_ attr: NSAttributedString, in rect: CGRect) {
+        let sz = attr.size()
+        attr.draw(at: CGPoint(x: rect.midX - sz.width / 2,
+                              y: rect.midY - sz.height / 2))
     }
 
     fileprivate func makeCelebrationOverlay(

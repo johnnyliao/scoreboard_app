@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show FontFeature;
 import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -60,6 +61,28 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   int _batteryLevel = -1;
   DateTime? _streamStartTime;
 
+  // Match clock — wall-clock anchored so pause/resume never drifts.
+  // _clockAccumMs holds time from completed runs; _clockRunStart marks the
+  // current run (null when paused). _matchTimer only drives the 1s refresh+sync.
+  int _clockAccumMs = 0;
+  DateTime? _clockRunStart;
+  Timer? _matchTimer;
+
+  bool get _isClockRunning => _clockRunStart != null;
+
+  int get _matchSeconds {
+    var ms = _clockAccumMs;
+    if (_clockRunStart != null) {
+      ms += DateTime.now().difference(_clockRunStart!).inMilliseconds;
+    }
+    return ms ~/ 1000;
+  }
+
+  String get _clockText {
+    final s = _matchSeconds;
+    return '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
+  }
+
   late final TextEditingController _titleCtrl;
 
   @override
@@ -104,6 +127,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
     _streamChannel.setMethodCallHandler(null);
     _clockTimer?.cancel();
     _batteryTimer?.cancel();
+    _matchTimer?.cancel();
     _titleCtrl.dispose();
     super.dispose();
   }
@@ -117,8 +141,47 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
         'homeScore': _homeScore,
         'awayName': _awayName,
         'awayScore': _awayScore,
+        'clock': _clockText,
       });
     }
+  }
+
+  // ── Match clock ────────────────────────────────────────────
+
+  void _startClock() {
+    if (_isClockRunning) return;
+    _clockRunStart = DateTime.now();
+    _matchTimer?.cancel();
+    _matchTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() {}); // refresh in-app clock display
+      _syncScore();    // push new clock to the YouTube overlay
+    });
+    setState(() {});
+    _syncScore();
+  }
+
+  void _pauseClock() {
+    if (!_isClockRunning) return;
+    _clockAccumMs +=
+        DateTime.now().difference(_clockRunStart!).inMilliseconds;
+    _clockRunStart = null;
+    _matchTimer?.cancel();
+    _matchTimer = null;
+    setState(() {});
+    _syncScore();
+  }
+
+  void _toggleClock() => _isClockRunning ? _pauseClock() : _startClock();
+
+  void _resetClock() {
+    _matchTimer?.cancel();
+    _matchTimer = null;
+    setState(() {
+      _clockAccumMs = 0;
+      _clockRunStart = null;
+    });
+    _syncScore();
   }
 
   // ── Sign in / out ──────────────────────────────────────────
@@ -406,7 +469,11 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                       _CenterPanel(
                           onReset: _reset,
                           onGoal: _isStreaming ? _triggerGoal : null,
-                          isStreaming: _isStreaming),
+                          isStreaming: _isStreaming,
+                          clockText: _clockText,
+                          isClockRunning: _isClockRunning,
+                          onToggleClock: _toggleClock,
+                          onResetClock: _resetClock),
                       Expanded(
                         child: _TeamPanel(
                           name: _awayName,
@@ -764,9 +831,20 @@ class _CenterPanel extends StatelessWidget {
   final VoidCallback onReset;
   final VoidCallback? onGoal;
   final bool isStreaming;
+  final String clockText;
+  final bool isClockRunning;
+  final VoidCallback onToggleClock;
+  final VoidCallback onResetClock;
 
-  const _CenterPanel(
-      {required this.onReset, required this.onGoal, required this.isStreaming});
+  const _CenterPanel({
+    required this.onReset,
+    required this.onGoal,
+    required this.isStreaming,
+    required this.clockText,
+    required this.isClockRunning,
+    required this.onToggleClock,
+    required this.onResetClock,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -801,6 +879,52 @@ class _CenterPanel extends StatelessWidget {
               letterSpacing: 2,
             ),
           ),
+        const SizedBox(height: 14),
+
+        // ── Match clock display ──
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black54,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isClockRunning ? Colors.greenAccent : Colors.white24,
+              width: 1.2,
+            ),
+          ),
+          child: Text(
+            clockText,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              fontFeatures: [FontFeature.tabularFigures()],
+              letterSpacing: 1.5,
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        // ── Start / Pause + Reset clock ──
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ClockButton(
+              icon: isClockRunning ? Icons.pause : Icons.play_arrow,
+              color: isClockRunning
+                  ? const Color(0xFFFFB300)
+                  : const Color(0xFF43A047),
+              onTap: onToggleClock,
+            ),
+            const SizedBox(width: 8),
+            _ClockButton(
+              icon: Icons.restart_alt,
+              color: Colors.white24,
+              onTap: onResetClock,
+            ),
+          ],
+        ),
+
         const SizedBox(height: 16),
         if (onGoal != null)
           GestureDetector(
@@ -884,6 +1008,41 @@ class _ScoreButton extends StatelessWidget {
               fontWeight: FontWeight.w600,
               height: 1,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Clock Button ─────────────────────────────────────────────
+
+class _ClockButton extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _ClockButton({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: color.withOpacity(0.22),
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: 38,
+          height: 38,
+          child: Icon(
+            icon,
+            color: color == Colors.white24 ? Colors.white70 : Colors.white,
+            size: 22,
           ),
         ),
       ),

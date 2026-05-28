@@ -421,12 +421,12 @@ class StreamingService: NSObject {
         clock: String,
         size: CGSize
     ) -> CIImage? {
-        let originX: CGFloat = 40
-        let originY: CGFloat = 40
-        let barH: CGFloat = 66
-        let cellPadX: CGFloat = 20
-        let cornerRadius: CGFloat = 13
-        let accentH: CGFloat = 4
+        let originX: CGFloat = 48
+        let originY: CGFloat = 48
+        let barH: CGFloat = 90
+        let cellPadX: CGFloat = 26
+        let cornerRadius: CGFloat = 16
+        let accentH: CGFloat = 5
 
         // Match the Flutter team accent colors so UI and overlay stay consistent.
         let homeColor = UIColor(red: 33.0/255.0, green: 150.0/255.0, blue: 243.0/255.0, alpha: 1) // #2196F3
@@ -436,9 +436,9 @@ class StreamingService: NSObject {
         let divider = UIColor(white: 1, alpha: 0.10)
         let border = UIColor(white: 1, alpha: 0.08)
 
-        let nameFont = UIFont.systemFont(ofSize: 30, weight: .semibold)
-        let scoreFont = UIFont.monospacedDigitSystemFont(ofSize: 34, weight: .heavy)
-        let clockFont = UIFont.monospacedDigitSystemFont(ofSize: 30, weight: .bold)
+        let nameFont = UIFont.systemFont(ofSize: 40, weight: .semibold)
+        let scoreFont = UIFont.monospacedDigitSystemFont(ofSize: 48, weight: .heavy)
+        let clockFont = UIFont.monospacedDigitSystemFont(ofSize: 40, weight: .bold)
         let white = UIColor.white
 
         let homeNameAttr = NSAttributedString(
@@ -461,8 +461,8 @@ class StreamingService: NSObject {
         let homeNameCellW = ceil(homeNameAttr.size().width) + cellPadX * 2
         let awayNameCellW = ceil(awayNameAttr.size().width) + cellPadX * 2
         // Shared score-cell width keeps the center symmetric even when one side is 2-digit.
-        let scoreCellW = max(54, max(ceil(homeScoreAttr.size().width),
-                                     ceil(awayScoreAttr.size().width)) + 28)
+        let scoreCellW = max(74, max(ceil(homeScoreAttr.size().width),
+                                     ceil(awayScoreAttr.size().width)) + 36)
 
         let totalW = clockCellW + homeNameCellW + scoreCellW + scoreCellW + awayNameCellW
         let barRect = CGRect(x: originX, y: originY, width: totalW, height: barH)

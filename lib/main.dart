@@ -14,7 +14,7 @@ const _streamChannel = MethodChannel('com.scoreboard/streaming');
 // 前 12 位是隊上球員(號碼非連續,沒有 3/12/13);最後 2 位是別隊租借、無號碼,
 // 格子只顯示姓氏(簡/林),慶祝仍顯示名字(以諾/言瑀)。
 const List<({String tile, String name})> _players = [
-  (tile: '1', name: '胤丞'),  (tile: '2', name: '秉彥'),  (tile: '4', name: '浩宇'),  (tile: '5', name: '胤銘'),
+  (tile: '1', name: '胤丞'),  (tile: '2', name: '秉諺'),  (tile: '4', name: '浩宇'),  (tile: '5', name: '胤銘'),
   (tile: '6', name: '梓敬'),  (tile: '7', name: '祐翼'),  (tile: '8', name: '學濬'),  (tile: '9', name: '宥愷'),
   (tile: '10', name: '岳辰'), (tile: '11', name: '翰墨'), (tile: '14', name: '祥宇'), (tile: '15', name: '祐瑀'),
   (tile: '簡', name: '以諾'),  (tile: '林', name: '言瑀'),

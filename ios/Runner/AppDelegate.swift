@@ -79,7 +79,9 @@ import AVFoundation
                 )
                 result(nil)
             case "triggerGoal":
-                self?.streamingService?.triggerGoal()
+                let args = call.arguments as? [String: Any]
+                let playerName = args?["playerName"] as? String
+                self?.streamingService?.triggerGoal(playerName: playerName)
                 result(nil)
             default:
                 result(FlutterMethodNotImplemented)

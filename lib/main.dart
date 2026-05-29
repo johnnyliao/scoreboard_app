@@ -9,6 +9,14 @@ import 'youtube_service.dart';
 
 const _streamChannel = MethodChannel('com.scoreboard/streaming');
 
+// 球員名冊 — 順序即 4x3 grid 排版順序(左上→右下)。
+// 球衣號碼非連續(沒有 3/12/13),12 人剛好 4x3。
+const List<(int, String)> _players = [
+  (1, '胤丞'),  (2, '秉彥'),  (4, '浩宇'),  (5, '胤銘'),
+  (6, '梓敬'),  (7, '祐翼'),  (8, '學濬'),  (9, '宥愷'),
+  (10, '岳辰'), (11, '翰墨'), (14, '祥宇'), (15, '祐瑀'),
+];
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([
@@ -324,9 +332,28 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
     _syncScore();
   }
 
-  Future<void> _triggerGoal() async {
+  /// 按下 GOAL 後先彈出球員選號 modal,選定後才真正觸發慶祝動畫。
+  void _triggerGoal() {
+    HapticFeedback.lightImpact();
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.55),
+      builder: (ctx) => _GoalPickerDialog(
+        players: _players,
+        onPick: (number, name) {
+          Navigator.pop(ctx);
+          _fireGoal(number, name);
+        },
+      ),
+    );
+  }
+
+  Future<void> _fireGoal(int number, String name) async {
     HapticFeedback.heavyImpact();
-    await _streamChannel.invokeMethod('triggerGoal');
+    await _streamChannel.invokeMethod('triggerGoal', {
+      'playerName': name,
+      'playerNumber': number,
+    });
   }
 
   void _reset() {
@@ -1006,6 +1033,113 @@ class _ScoreButton extends StatelessWidget {
               color: color == Colors.white24 ? Colors.white60 : color,
               fontSize: 30,
               fontWeight: FontWeight.w600,
+              height: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Goal Picker Dialog ───────────────────────────────────────
+
+class _GoalPickerDialog extends StatelessWidget {
+  final List<(int, String)> players;
+  final void Function(int number, String name) onPick;
+
+  const _GoalPickerDialog({required this.players, required this.onPick});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFF141821),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 48, vertical: 24),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: const [
+                Icon(Icons.sports_soccer, color: Color(0xFFFFD700), size: 22),
+                SizedBox(width: 8),
+                Text(
+                  '誰進球的?',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 4,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              childAspectRatio: 1.45,
+              children: [
+                for (final (number, name) in players)
+                  _PlayerTile(
+                    number: number,
+                    name: name,
+                    onTap: () => onPick(number, name),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              style: TextButton.styleFrom(foregroundColor: Colors.white54),
+              child: const Text('取消'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlayerTile extends StatelessWidget {
+  final int number;
+  final String name;
+  final VoidCallback onTap;
+
+  const _PlayerTile({
+    required this.number,
+    required this.name,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFF1F2735),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white12, width: 1),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            '$number',
+            style: const TextStyle(
+              color: Color(0xFFFFD700),
+              fontSize: 32,
+              fontWeight: FontWeight.w900,
+              fontFeatures: [FontFeature.tabularFigures()],
               height: 1,
             ),
           ),

@@ -27,6 +27,7 @@ final class ScoreboardOverlayEffect: VideoEffect {
         let scoreOverlay = service.cachedOverlay
         let celStart = service.celebrationStart
         let celParticles = service.confettiParticles
+        let celName = service.celebrationName
         service.overlayLock.unlock()
 
         if let overlay = scoreOverlay {
@@ -44,11 +45,13 @@ final class ScoreboardOverlayEffect: VideoEffect {
                 if service.celebrationStart == start {
                     service.celebrationStart = nil
                     service.confettiParticles = []
+                    service.celebrationName = nil
                 }
                 service.overlayLock.unlock()
             } else if let celOverlay = service.makeCelebrationOverlay(
                 elapsed: elapsed,
                 particles: celParticles,
+                name: celName,
                 frameW: frameW,
                 frameH: frameH
             ) {
@@ -78,6 +81,11 @@ class StreamingService: NSObject {
     fileprivate var celebrationStart: Date?
     fileprivate let celebrationDuration: TimeInterval = 3.0
     fileprivate var confettiParticles: [Particle] = []
+    fileprivate var celebrationName: String?
+
+    /// Visual size multiplier for the goal celebration (particles, text, beam,
+    /// border, shadow). 1.0 = pre-2026-05 size; current = 1.2 (+20%).
+    fileprivate let celebrationScale: CGFloat = 1.2
 
     private var celebrationBuffer: UnsafeMutableRawPointer?
     private var celebrationFrameSize: CGSize = .zero
@@ -210,6 +218,7 @@ class StreamingService: NSObject {
         overlayLock.lock()
         celebrationStart = nil
         confettiParticles = []
+        celebrationName = nil
         overlayLock.unlock()
 
         AVCaptureDevice.requestAccess(for: .video) { [weak self] videoOk in
@@ -373,6 +382,7 @@ class StreamingService: NSObject {
         overlayLock.lock()
         celebrationStart = nil
         confettiParticles = []
+        celebrationName = nil
         overlayLock.unlock()
 
         DispatchQueue.main.async {
@@ -380,12 +390,15 @@ class StreamingService: NSObject {
         }
     }
 
-    func triggerGoal() {
+    func triggerGoal(playerName: String? = nil) {
         let colors: [(CGFloat, CGFloat, CGFloat)] = [
             (1.0, 0.22, 0.22), (0.25, 0.60, 1.0), (1.0, 0.88, 0.10),
             (0.20, 0.85, 0.35), (1.0, 0.50, 0.10), (0.88, 0.25, 0.90),
             (1.0, 1.0, 1.0), (0.10, 0.90, 0.90), (1.0, 0.60, 0.80),
         ]
+        // Particle SIZES are scaled with celebrationScale (+20%); positions and
+        // velocities stay tied to the 1920x1080 frame so they don't fly off.
+        let cs = celebrationScale
         let particles: [Particle] = (0..<40).map { _ in
             let c = colors[Int.random(in: 0..<colors.count)]
             return Particle(
@@ -396,15 +409,17 @@ class StreamingService: NSObject {
                 r: c.0,
                 g: c.1,
                 b: c.2,
-                w: CGFloat.random(in: 9...20),
-                h: CGFloat.random(in: 14...26),
+                w: CGFloat.random(in: 9...20) * cs,
+                h: CGFloat.random(in: 14...26) * cs,
                 rot0: CGFloat.random(in: 0...(2 * .pi)),
                 rotV: CGFloat.random(in: -5...5)
             )
         }
+        let cleanName = playerName?.trimmingCharacters(in: .whitespacesAndNewlines)
         overlayLock.lock()
         celebrationStart = Date()
         confettiParticles = particles
+        celebrationName = (cleanName?.isEmpty == false) ? cleanName : nil
         overlayLock.unlock()
     }
 
@@ -549,9 +564,48 @@ class StreamingService: NSObject {
                               y: rect.midY - sz.height / 2))
     }
 
+    /// Draws `text` into a CGContext with a 4-corner outline shadow (offset
+    /// passes for emphasis) followed by a single fill pass. CoreText-based
+    /// (works on a manually-created CGContext, unlike UIKit's draw(at:)).
+    private func drawShadowedText(
+        _ text: String,
+        font: CTFont,
+        fillColor: CGColor,
+        outlineColor: CGColor,
+        baseline: CGPoint,
+        shadowOffset: CGFloat,
+        in ctx: CGContext
+    ) {
+        let outlineAttrs: [CFString: Any] = [
+            kCTFontAttributeName: font,
+            kCTForegroundColorAttributeName: outlineColor,
+        ]
+        let outlineLine = CTLineCreateWithAttributedString(
+            CFAttributedStringCreate(nil, text as CFString, outlineAttrs as CFDictionary)!
+        )
+        for dx: CGFloat in [-shadowOffset, shadowOffset] {
+            for dy: CGFloat in [-shadowOffset, shadowOffset] {
+                ctx.textMatrix = .identity
+                ctx.textPosition = CGPoint(x: baseline.x + dx, y: baseline.y + dy)
+                CTLineDraw(outlineLine, ctx)
+            }
+        }
+        let fillAttrs: [CFString: Any] = [
+            kCTFontAttributeName: font,
+            kCTForegroundColorAttributeName: fillColor,
+        ]
+        let fillLine = CTLineCreateWithAttributedString(
+            CFAttributedStringCreate(nil, text as CFString, fillAttrs as CFDictionary)!
+        )
+        ctx.textMatrix = .identity
+        ctx.textPosition = baseline
+        CTLineDraw(fillLine, ctx)
+    }
+
     fileprivate func makeCelebrationOverlay(
         elapsed: CGFloat,
         particles: [Particle],
+        name: String?,
         frameW: Int,
         frameH: Int
     ) -> CIImage? {
@@ -593,8 +647,10 @@ class StreamingService: NSObject {
             let t = elapsed.truncatingRemainder(dividingBy: pulsePeriod) / pulsePeriod
             let pulseAlpha = sin(t * .pi) * 0.85
             ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: pulseAlpha))
-            ctx.setLineWidth(20)
-            ctx.stroke(CGRect(x: 0, y: 0, width: W, height: H).insetBy(dx: 10, dy: 10))
+            let pulseWidth = 20 * celebrationScale
+            ctx.setLineWidth(pulseWidth)
+            ctx.stroke(CGRect(x: 0, y: 0, width: W, height: H)
+                .insetBy(dx: pulseWidth / 2, dy: pulseWidth / 2))
         }
 
         if elapsed < 2.0 {
@@ -627,36 +683,69 @@ class StreamingService: NSObject {
             return ctx.makeImage().map { CIImage(cgImage: $0) }
         }
 
-        let fontSize: CGFloat = 140 * scale
-        let font = CTFontCreateWithName("Impact" as CFString, fontSize, nil)
+        // Text rendering — two-line if a player name is provided:
+        //   <name>     (smaller, white)
+        //   GOAL!      (big Impact, yellow w/ black stroke)
+        // Otherwise: just "GOAL!" centered.
+        let goalFontSize: CGFloat = 140 * celebrationScale * scale
+        let goalFont = CTFontCreateWithName("Impact" as CFString, goalFontSize, nil)
+        let shadowOffset: CGFloat = 3 * celebrationScale
 
-        for pass in 0...1 {
-            let isOutline = pass == 0
-            let color: CGColor = isOutline
-                ? CGColor(red: 0, green: 0, blue: 0, alpha: goalAlpha)
-                : CGColor(red: 1, green: 0.92, blue: 0.10, alpha: goalAlpha)
-            let attrs: [CFString: Any] = [
-                kCTFontAttributeName: font,
-                kCTForegroundColorAttributeName: color,
-            ]
-            let attrStr = CFAttributedStringCreate(nil, "GOAL!" as CFString, attrs as CFDictionary)!
-            let line = CTLineCreateWithAttributedString(attrStr)
-            let bounds = CTLineGetBoundsWithOptions(line, [])
-            let textX = (W - bounds.width) / 2 - bounds.origin.x
-            let textY = H / 2 - bounds.height / 2 - bounds.origin.y
-            if isOutline {
-                for dx: CGFloat in [-3, 3] {
-                    for dy: CGFloat in [-3, 3] {
-                        ctx.textMatrix = .identity
-                        ctx.textPosition = CGPoint(x: textX + dx, y: textY + dy)
-                        CTLineDraw(line, ctx)
-                    }
-                }
-            } else {
-                ctx.textMatrix = .identity
-                ctx.textPosition = CGPoint(x: textX, y: textY)
-                CTLineDraw(line, ctx)
-            }
+        let cleanName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasName = (cleanName?.isEmpty == false)
+        let nameFontSize: CGFloat = goalFontSize * 0.55
+        // PingFangTC handles the Traditional Chinese roster cleanly; CoreText
+        // falls back automatically if the named font isn't present.
+        let nameFont: CTFont? = hasName
+            ? CTFontCreateWithName("PingFangTC-Semibold" as CFString, nameFontSize, nil)
+            : nil
+
+        // Measure
+        let goalMeasureLine = CTLineCreateWithAttributedString(
+            CFAttributedStringCreate(nil, "GOAL!" as CFString,
+                [kCTFontAttributeName: goalFont] as CFDictionary)!)
+        var goalAsc: CGFloat = 0, goalDesc: CGFloat = 0
+        let goalW = CGFloat(CTLineGetTypographicBounds(goalMeasureLine, &goalAsc, &goalDesc, nil))
+        let goalH = goalAsc + goalDesc
+
+        var nameW: CGFloat = 0, nameAsc: CGFloat = 0, nameDesc: CGFloat = 0, nameH: CGFloat = 0
+        if hasName, let cleanName, let nameFont {
+            let nameMeasureLine = CTLineCreateWithAttributedString(
+                CFAttributedStringCreate(nil, cleanName as CFString,
+                    [kCTFontAttributeName: nameFont] as CFDictionary)!)
+            nameW = CGFloat(CTLineGetTypographicBounds(nameMeasureLine, &nameAsc, &nameDesc, nil))
+            nameH = nameAsc + nameDesc
+        }
+
+        let gap: CGFloat = hasName ? nameH * 0.20 : 0
+        let totalH = nameH + gap + goalH
+
+        // CG coords: +y = up. Stack vertically centered at H/2.
+        let goalBaselineY = H / 2 - totalH / 2 + goalDesc
+        let goalX = (W - goalW) / 2
+
+        drawShadowedText(
+            "GOAL!",
+            font: goalFont,
+            fillColor: CGColor(red: 1, green: 0.92, blue: 0.10, alpha: goalAlpha),
+            outlineColor: CGColor(red: 0, green: 0, blue: 0, alpha: goalAlpha),
+            baseline: CGPoint(x: goalX, y: goalBaselineY),
+            shadowOffset: shadowOffset,
+            in: ctx
+        )
+
+        if hasName, let cleanName, let nameFont {
+            let nameBaselineY = goalBaselineY + goalAsc + gap + nameDesc
+            let nameX = (W - nameW) / 2
+            drawShadowedText(
+                cleanName,
+                font: nameFont,
+                fillColor: CGColor(red: 1, green: 1, blue: 1, alpha: goalAlpha),
+                outlineColor: CGColor(red: 0, green: 0, blue: 0, alpha: goalAlpha * 0.85),
+                baseline: CGPoint(x: nameX, y: nameBaselineY),
+                shadowOffset: shadowOffset * 0.6,
+                in: ctx
+            )
         }
 
         if elapsed >= 0.2 && elapsed < 1.0 {
@@ -667,7 +756,8 @@ class StreamingService: NSObject {
             ctx.translateBy(x: beamX, y: H / 2)
             ctx.rotate(by: 0.32)
             ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: beamAlpha))
-            ctx.fill(CGRect(x: -90, y: -H, width: 180, height: H * 2))
+            let beamHalfW = 90 * celebrationScale
+            ctx.fill(CGRect(x: -beamHalfW, y: -H, width: beamHalfW * 2, height: H * 2))
             ctx.restoreGState()
         }
 

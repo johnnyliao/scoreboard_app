@@ -186,8 +186,14 @@ class StreamingService: NSObject {
         homeScore: Int,
         awayName: String,
         awayScore: Int,
-        clock: String = ""
+        clock: String = "",
+        homeColorARGB: UInt32? = nil,
+        awayColorARGB: UInt32? = nil
     ) {
+        // Defaults match the Flutter side (home 橘 #F57C00, away 黃 #FDD835)
+        // so a missing color arg never produces an unexpected look.
+        let homeColor = homeColorARGB.map(Self.colorFromARGB) ?? UIColor(red: 0xF5/255.0, green: 0x7C/255.0, blue: 0x00/255.0, alpha: 1)
+        let awayColor = awayColorARGB.map(Self.colorFromARGB) ?? UIColor(red: 0xFD/255.0, green: 0xD8/255.0, blue: 0x35/255.0, alpha: 1)
         let size = CGSize(width: 1920, height: 1080)
         let overlay = makeScoreOverlay(
             homeName: homeName,
@@ -195,11 +201,30 @@ class StreamingService: NSObject {
             awayName: awayName,
             awayScore: awayScore,
             clock: clock,
+            homeColor: homeColor,
+            awayColor: awayColor,
             size: size
         )
         overlayLock.lock()
         cachedOverlay = overlay
         overlayLock.unlock()
+    }
+
+    /// Flutter `Color.value` is 32-bit ARGB. Convert to UIColor.
+    static func colorFromARGB(_ argb: UInt32) -> UIColor {
+        let a = CGFloat((argb >> 24) & 0xFF) / 255.0
+        let r = CGFloat((argb >> 16) & 0xFF) / 255.0
+        let g = CGFloat((argb >> 8) & 0xFF) / 255.0
+        let b = CGFloat(argb & 0xFF) / 255.0
+        return UIColor(red: r, green: g, blue: b, alpha: a)
+    }
+
+    /// Black or white text, whichever reads better on `bg` (perceived luminance).
+    static func contrastingText(on bg: UIColor) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        bg.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        return luminance > 0.6 ? UIColor.black : UIColor.white
     }
 
     func startStream(url: String, key: String, completion: @escaping (Bool, String?) -> Void) {
@@ -434,6 +459,8 @@ class StreamingService: NSObject {
         awayName: String,
         awayScore: Int,
         clock: String,
+        homeColor: UIColor,
+        awayColor: UIColor,
         size: CGSize
     ) -> CIImage? {
         let originX: CGFloat = 48
@@ -443,9 +470,7 @@ class StreamingService: NSObject {
         let cornerRadius: CGFloat = 16
         let accentH: CGFloat = 5
 
-        // Match the Flutter team accent colors so UI and overlay stay consistent.
-        let homeColor = UIColor(red: 33.0/255.0, green: 150.0/255.0, blue: 243.0/255.0, alpha: 1) // #2196F3
-        let awayColor = UIColor(red: 229.0/255.0, green: 57.0/255.0, blue: 53.0/255.0, alpha: 1)  // #E53935
+        // homeColor / awayColor come from the Flutter UI (user-selectable).
         let barBG = UIColor(red: 0.04, green: 0.055, blue: 0.105, alpha: 0.86)                   // dark navy
         let clockTint = UIColor(white: 0, alpha: 0.30)
         let divider = UIColor(white: 1, alpha: 0.10)
@@ -455,6 +480,10 @@ class StreamingService: NSObject {
         let scoreFont = UIFont.monospacedDigitSystemFont(ofSize: 48, weight: .heavy)
         let clockFont = UIFont.monospacedDigitSystemFont(ofSize: 40, weight: .bold)
         let white = UIColor.white
+        // Score sits inside a team-colored cell; pick readable text per side
+        // (e.g. white/yellow cells get dark text).
+        let homeScoreText = Self.contrastingText(on: homeColor)
+        let awayScoreText = Self.contrastingText(on: awayColor)
 
         let homeNameAttr = NSAttributedString(
             string: homeName,
@@ -464,10 +493,10 @@ class StreamingService: NSObject {
             attributes: [.font: nameFont, .foregroundColor: white])
         let homeScoreAttr = NSAttributedString(
             string: "\(homeScore)",
-            attributes: [.font: scoreFont, .foregroundColor: white])
+            attributes: [.font: scoreFont, .foregroundColor: homeScoreText])
         let awayScoreAttr = NSAttributedString(
             string: "\(awayScore)",
-            attributes: [.font: scoreFont, .foregroundColor: white])
+            attributes: [.font: scoreFont, .foregroundColor: awayScoreText])
         let clockAttr = NSAttributedString(
             string: clock.isEmpty ? "00:00" : clock,
             attributes: [.font: clockFont, .foregroundColor: white])

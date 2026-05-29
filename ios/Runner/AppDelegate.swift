@@ -75,7 +75,9 @@ import AVFoundation
                     homeScore: args["homeScore"] as? Int ?? 0,
                     awayName: args["awayName"] as? String ?? "客隊",
                     awayScore: args["awayScore"] as? Int ?? 0,
-                    clock: args["clock"] as? String ?? ""
+                    clock: args["clock"] as? String ?? "",
+                    homeColorARGB: (args["homeColor"] as? NSNumber)?.uint32Value,
+                    awayColorARGB: (args["awayColor"] as? NSNumber)?.uint32Value
                 )
                 result(nil)
             case "triggerGoal":

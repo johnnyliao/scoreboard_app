@@ -20,6 +20,30 @@ const List<({String tile, String name})> _players = [
   (tile: '簡', name: '以諾'),  (tile: '林', name: '言瑀'),
 ];
 
+// 隊伍顏色調色盤。橘/紫為兩隊共用的單一來源,避免值不一致。
+const int _kOrange = 0xFFF57C00;
+const int _kPurple = 0xFF8E24AA;
+
+// 客隊可選的完整 10 色(常見足球隊服配色),預設黃。
+const List<({String name, int value})> _awayColors = [
+  (name: '紅',   value: 0xFFE53935),
+  (name: '橘',   value: _kOrange),
+  (name: '黃',   value: 0xFFFDD835),
+  (name: '綠',   value: 0xFF43A047),
+  (name: '淺藍', value: 0xFF29B6F6),
+  (name: '深藍', value: 0xFF1565C0),
+  (name: '紫',   value: _kPurple),
+  (name: '黑',   value: 0xFF212121),
+  (name: '白',   value: 0xFFFFFFFF),
+  (name: '桃紅', value: 0xFFEC407A),
+];
+
+// 主隊只有橘、紫兩套球衣,預設橘。
+const List<({String name, int value})> _homeColors = [
+  (name: '橘', value: _kOrange),
+  (name: '紫', value: _kPurple),
+];
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([
@@ -54,6 +78,10 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   int _awayScore = 0;
   String _homeName = '安和';
   String _awayName = '客隊';
+
+  // Team colors — synced to the YouTube overlay. Defaults: home 橘, away 黃.
+  Color _homeColor = const Color(_kOrange);
+  Color _awayColor = const Color(0xFFFDD835);
 
   bool _isStreaming = false;
   bool _isLoading = false;
@@ -153,6 +181,8 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
         'awayName': _awayName,
         'awayScore': _awayScore,
         'clock': _clockText,
+        'homeColor': _homeColor.value,
+        'awayColor': _awayColor.value,
       });
     }
   }
@@ -335,6 +365,33 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
     _syncScore();
   }
 
+  // ── Team color ─────────────────────────────────────────────
+
+  void _editColor(bool isHome) {
+    final options = isHome ? _homeColors : _awayColors;
+    final current = isHome ? _homeColor : _awayColor;
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.55),
+      builder: (ctx) => _ColorPickerDialog(
+        title: isHome ? '主隊顏色' : '客隊顏色',
+        options: options,
+        selected: current.value,
+        onPick: (value) {
+          Navigator.pop(ctx);
+          setState(() {
+            if (isHome) {
+              _homeColor = Color(value);
+            } else {
+              _awayColor = Color(value);
+            }
+          });
+          _syncScore();
+        },
+      ),
+    );
+  }
+
   /// 按下 GOAL 後先彈出球員選號 modal,選定後才真正觸發慶祝動畫。
   void _triggerGoal() {
     HapticFeedback.lightImpact();
@@ -480,7 +537,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                         child: _TeamPanel(
                           name: _homeName,
                           score: _homeScore,
-                          accentColor: const Color(0xFF2196F3),
+                          accentColor: _homeColor,
                           onAdd: () {
                             setState(() => _homeScore++);
                             _syncScore();
@@ -492,6 +549,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                             _syncScore();
                           },
                           onEditName: () => _editName(true),
+                          onEditColor: () => _editColor(true),
                           translucent: _showCamera,
                         ),
                       ),
@@ -507,7 +565,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                         child: _TeamPanel(
                           name: _awayName,
                           score: _awayScore,
-                          accentColor: const Color(0xFFE53935),
+                          accentColor: _awayColor,
                           onAdd: () {
                             setState(() => _awayScore++);
                             _syncScore();
@@ -519,6 +577,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                             _syncScore();
                           },
                           onEditName: () => _editName(false),
+                          onEditColor: () => _editColor(false),
                           translucent: _showCamera,
                         ),
                       ),
@@ -775,6 +834,7 @@ class _TeamPanel extends StatelessWidget {
   final VoidCallback onAdd;
   final VoidCallback onSubtract;
   final VoidCallback onEditName;
+  final VoidCallback onEditColor;
   final bool translucent;
 
   const _TeamPanel({
@@ -784,6 +844,7 @@ class _TeamPanel extends StatelessWidget {
     required this.onAdd,
     required this.onSubtract,
     required this.onEditName,
+    required this.onEditColor,
     required this.translucent,
   });
 
@@ -802,26 +863,42 @@ class _TeamPanel extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          GestureDetector(
-            onTap: onEditName,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  name,
-                  style: TextStyle(
-                    color: accentColor,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.2,
-                  ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GestureDetector(
+                onTap: onEditName,
+                behavior: HitTestBehavior.opaque,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      name,
+                      style: TextStyle(
+                        color: accentColor,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Icon(Icons.edit,
+                        color: accentColor.withOpacity(0.5), size: 14),
+                  ],
                 ),
-                const SizedBox(width: 5),
-                Icon(Icons.edit,
-                    color: accentColor.withOpacity(0.5), size: 14),
-              ],
-            ),
+              ),
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: onEditColor,
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(Icons.palette,
+                      color: accentColor.withOpacity(0.7), size: 18),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           Text(
@@ -1150,6 +1227,127 @@ class _PlayerTile extends StatelessWidget {
               fontFeatures: [FontFeature.tabularFigures()],
               height: 1,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Color Picker Dialog ──────────────────────────────────────
+
+class _ColorPickerDialog extends StatelessWidget {
+  final String title;
+  final List<({String name, int value})> options;
+  final int selected;
+  final void Function(int value) onPick;
+
+  const _ColorPickerDialog({
+    required this.title,
+    required this.options,
+    required this.selected,
+    required this.onPick,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFF141821),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 48, vertical: 24),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.palette, color: Color(0xFFFFD700), size: 22),
+                const SizedBox(width: 8),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Flexible(
+              child: GridView.count(
+                shrinkWrap: true,
+                physics: const ClampingScrollPhysics(),
+                crossAxisCount: 5,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 10,
+                childAspectRatio: 1,
+                children: [
+                  for (final c in options)
+                    _ColorSwatch(
+                      name: c.name,
+                      value: c.value,
+                      isSelected: c.value == selected,
+                      onTap: () => onPick(c.value),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              style: TextButton.styleFrom(foregroundColor: Colors.white54),
+              child: const Text('取消'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ColorSwatch extends StatelessWidget {
+  final String name;
+  final int value;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _ColorSwatch({
+    required this.name,
+    required this.value,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Color(value);
+    // Pick a readable label color against the swatch by perceived luminance.
+    final luminance = color.computeLuminance();
+    final labelColor = luminance > 0.55 ? Colors.black87 : Colors.white;
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? Colors.white : Colors.white24,
+            width: isSelected ? 3 : 1,
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          name,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: labelColor,
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),

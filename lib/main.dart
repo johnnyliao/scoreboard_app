@@ -9,12 +9,15 @@ import 'youtube_service.dart';
 
 const _streamChannel = MethodChannel('com.scoreboard/streaming');
 
-// 球員名冊 — 順序即 4x3 grid 排版順序(左上→右下)。
-// 球衣號碼非連續(沒有 3/12/13),12 人剛好 4x3。
-const List<(int, String)> _players = [
-  (1, '胤丞'),  (2, '秉彥'),  (4, '浩宇'),  (5, '胤銘'),
-  (6, '梓敬'),  (7, '祐翼'),  (8, '學濬'),  (9, '宥愷'),
-  (10, '岳辰'), (11, '翰墨'), (14, '祥宇'), (15, '祐瑀'),
+// 球員名冊 — 順序即選號 grid 排版順序(左上→右下,每列 4 格,可上下滑動)。
+// tile = 格子上顯示的文字(球衣號碼,或租借球員的姓氏);name = 進球慶祝顯示的名字。
+// 前 12 位是隊上球員(號碼非連續,沒有 3/12/13);最後 2 位是別隊租借、無號碼,
+// 格子只顯示姓氏(簡/林),慶祝仍顯示名字(以諾/言瑀)。
+const List<({String tile, String name})> _players = [
+  (tile: '1', name: '胤丞'),  (tile: '2', name: '秉彥'),  (tile: '4', name: '浩宇'),  (tile: '5', name: '胤銘'),
+  (tile: '6', name: '梓敬'),  (tile: '7', name: '祐翼'),  (tile: '8', name: '學濬'),  (tile: '9', name: '宥愷'),
+  (tile: '10', name: '岳辰'), (tile: '11', name: '翰墨'), (tile: '14', name: '祥宇'), (tile: '15', name: '祐瑀'),
+  (tile: '簡', name: '以諾'),  (tile: '林', name: '言瑀'),
 ];
 
 void main() {
@@ -340,19 +343,18 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       barrierColor: Colors.black.withOpacity(0.55),
       builder: (ctx) => _GoalPickerDialog(
         players: _players,
-        onPick: (number, name) {
+        onPick: (name) {
           Navigator.pop(ctx);
-          _fireGoal(number, name);
+          _fireGoal(name);
         },
       ),
     );
   }
 
-  Future<void> _fireGoal(int number, String name) async {
+  Future<void> _fireGoal(String name) async {
     HapticFeedback.heavyImpact();
     await _streamChannel.invokeMethod('triggerGoal', {
       'playerName': name,
-      'playerNumber': number,
     });
   }
 
@@ -1045,8 +1047,8 @@ class _ScoreButton extends StatelessWidget {
 // ── Goal Picker Dialog ───────────────────────────────────────
 
 class _GoalPickerDialog extends StatelessWidget {
-  final List<(int, String)> players;
-  final void Function(int number, String name) onPick;
+  final List<({String tile, String name})> players;
+  final void Function(String name) onPick;
 
   const _GoalPickerDialog({required this.players, required this.onPick});
 
@@ -1078,11 +1080,12 @@ class _GoalPickerDialog extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 14),
-            // Flexible + scrollable so the 3rd (bottom) row stays reachable in
-            // landscape, where dialog height is tight (~342pt usable). Without
-            // this the Column overflowed and the last row fell outside the
-            // tappable area. childAspectRatio raised so all 3 rows normally fit
-            // without scrolling; scrolling is the safety net for shorter screens.
+            // Flexible + scrollable so lower rows stay reachable in landscape,
+            // where dialog height is tight (~342pt usable). Without this the
+            // Column overflowed and the bottom row fell outside the tappable
+            // area. childAspectRatio is tuned so the first ~3 rows fit without
+            // scrolling; with 14 players (4 rows) the 4th row (the 2 loaned
+            // players) is reached by scrolling — the safety net.
             Flexible(
               child: GridView.count(
                 shrinkWrap: true,
@@ -1092,11 +1095,10 @@ class _GoalPickerDialog extends StatelessWidget {
                 mainAxisSpacing: 10,
                 childAspectRatio: 2.7,
                 children: [
-                  for (final (number, name) in players)
+                  for (final p in players)
                     _PlayerTile(
-                      number: number,
-                      name: name,
-                      onTap: () => onPick(number, name),
+                      label: p.tile,
+                      onTap: () => onPick(p.name),
                     ),
                 ],
               ),
@@ -1115,13 +1117,11 @@ class _GoalPickerDialog extends StatelessWidget {
 }
 
 class _PlayerTile extends StatelessWidget {
-  final int number;
-  final String name;
+  final String label;
   final VoidCallback onTap;
 
   const _PlayerTile({
-    required this.number,
-    required this.name,
+    required this.label,
     required this.onTap,
   });
 
@@ -1141,7 +1141,8 @@ class _PlayerTile extends StatelessWidget {
           ),
           alignment: Alignment.center,
           child: Text(
-            '$number',
+            label,
+            maxLines: 1,
             style: const TextStyle(
               color: Color(0xFFFFD700),
               fontSize: 32,

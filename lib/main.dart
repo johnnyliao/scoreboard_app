@@ -1078,21 +1078,28 @@ class _GoalPickerDialog extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 14),
-            GridView.count(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisCount: 4,
-              crossAxisSpacing: 10,
-              mainAxisSpacing: 10,
-              childAspectRatio: 1.45,
-              children: [
-                for (final (number, name) in players)
-                  _PlayerTile(
-                    number: number,
-                    name: name,
-                    onTap: () => onPick(number, name),
-                  ),
-              ],
+            // Flexible + scrollable so the 3rd (bottom) row stays reachable in
+            // landscape, where dialog height is tight (~342pt usable). Without
+            // this the Column overflowed and the last row fell outside the
+            // tappable area. childAspectRatio raised so all 3 rows normally fit
+            // without scrolling; scrolling is the safety net for shorter screens.
+            Flexible(
+              child: GridView.count(
+                shrinkWrap: true,
+                physics: const ClampingScrollPhysics(),
+                crossAxisCount: 4,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 10,
+                childAspectRatio: 2.7,
+                children: [
+                  for (final (number, name) in players)
+                    _PlayerTile(
+                      number: number,
+                      name: name,
+                      onTap: () => onPick(number, name),
+                    ),
+                ],
+              ),
             ),
             const SizedBox(height: 10),
             TextButton(

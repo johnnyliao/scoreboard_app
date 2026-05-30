@@ -95,7 +95,18 @@ class StreamingService: NSObject {
     private var connectTimeoutItem: DispatchWorkItem?
 
     private var isStarting = false
-    private var isStreaming = false
+    private var isStreaming = false {
+        didSet {
+            // Keep the screen awake while live (the user watches the match
+            // without touching the phone); restore normal auto-lock when it
+            // stops. didSet covers every transition: succeedStart sets true,
+            // failStart/stopStream set false.
+            let live = isStreaming
+            DispatchQueue.main.async {
+                UIApplication.shared.isIdleTimerDisabled = live
+            }
+        }
+    }
     private var startToken = UUID()
     private var devicesAttached = false
 
@@ -152,6 +163,13 @@ class StreamingService: NSObject {
         stream.audioSettings = audioSettings
 
         stream.screen.size = CGSize(width: 1920, height: 1080)
+        // Screen.frameRate DEFAULTS to 15 in HaishinKit 1.9.9. In offscreen mode
+        // the encoded output fps is driven by the screen's choreographer
+        // (preferredFramesPerSecond = Screen.frameRate), NOT by stream.frameRate
+        // (which only sets the camera capture rate). Without this the stream went
+        // out at 15fps despite stream.frameRate = 30. Must be set before
+        // startRunning() (startRunning copies it into the choreographer).
+        stream.screen.frameRate = 30
         stream.screen.startRunning()  // activates offscreen compositing for the VideoEffect
         stream.registerVideoEffect(ScoreboardOverlayEffect(service: self))
 

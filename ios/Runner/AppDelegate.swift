@@ -37,6 +37,10 @@ import AVFoundation
         service.onDebugMessage = { message in
             channel.invokeMethod("debugStatus", arguments: message)
         }
+        // 斷線重連狀態 → Flutter ("reconnecting" / "reconnected" / "lost")
+        service.onConnectionState = { state in
+            channel.invokeMethod("connectionState", arguments: state)
+        }
 
         channel.setMethodCallHandler { [weak self] call, result in
             switch call.method {

@@ -110,6 +110,18 @@ class StreamingService: NSObject {
     private var startToken = UUID()
     private var devicesAttached = false
 
+    // ── 斷線重連 ──
+    // 直播中 RTMP 斷線時,用同一組 url/key 自動重連並重新 publish。
+    // onConnectionState 通知 Flutter: "reconnecting" / "reconnected" / "lost"。
+    var onConnectionState: ((String) -> Void)?
+    private var lastUrl: String?
+    private var lastKey: String?
+    private var isReconnecting = false
+    private var reconnectAttempt = 0
+    private let maxReconnectAttempts = 5
+    private var reconnectWorkItem: DispatchWorkItem?
+    private var reconnectTimeoutItem: DispatchWorkItem?
+
     fileprivate struct Particle {
         let x0: CGFloat
         let y0: CGFloat
@@ -256,6 +268,9 @@ class StreamingService: NSObject {
         let token = UUID()
         startToken = token
         isStarting = true
+        isReconnecting = false
+        reconnectAttempt = 0
+        cancelReconnectTimers()
         streamStartCompletion = completion
 
         overlayLock.lock()
@@ -280,6 +295,8 @@ class StreamingService: NSObject {
 
                     self.attachDevicesIfNeeded()
                     self.pendingStreamKey = key
+                    self.lastUrl = url
+                    self.lastKey = key
 
                     self.rtmpConnection.addEventListener(
                         .rtmpStatus,
@@ -323,6 +340,9 @@ class StreamingService: NSObject {
         debug("failStart: \(message)")
         connectTimeoutItem?.cancel()
         connectTimeoutItem = nil
+        cancelReconnectTimers()
+        isReconnecting = false
+        reconnectAttempt = 0
 
         rtmpConnection.removeEventListener(
             .rtmpStatus,
@@ -365,21 +385,122 @@ class StreamingService: NSObject {
         debug("rtmp connect status: \(code)")
 
         if code == "NetConnection.Connect.Success" {
-            rtmpConnection.removeEventListener(
-                .rtmpStatus,
-                selector: #selector(rtmpConnectHandler(_:)),
-                observer: self
-            )
-            guard let key = pendingStreamKey else {
-                debug("missing pending stream key")
-                failStart("找不到串流金鑰")
-                return
+            if isStarting {
+                // 首次連線成功 → publish + 回報 Flutter。
+                // 注意:不再移除 connect listener — 直播中要靠它偵測斷線
+                // (NetConnection.Connect.Closed),否則連線掉了 App 不會知道。
+                guard let key = pendingStreamKey else {
+                    debug("missing pending stream key")
+                    failStart("找不到串流金鑰")
+                    return
+                }
+                debug("rtmp publish requested")
+                rtmpStream?.publish(key)
+                succeedStart()
+            } else if isStreaming && isReconnecting {
+                // 斷線重連成功 → 用同一把 key 重新 publish。
+                // YouTube 端的 broadcast / liveStream 都還在,
+                // 推流恢復後直播會自動續播,觀眾連結不變。
+                guard let key = lastKey else { return }
+                debug("reconnected, re-publishing")
+                cancelReconnectTimers()
+                isReconnecting = false
+                reconnectAttempt = 0
+                rtmpStream?.publish(key)
+                notifyConnectionState("reconnected")
             }
-            debug("rtmp publish requested")
-            rtmpStream?.publish(key)
-            succeedStart()
         } else if code.contains("Failed") || code.contains("Rejected") || code == "NetConnection.Connect.Closed" {
-            failStart("RTMP 連線失敗: \(code)")
+            if isStarting {
+                failStart("RTMP 連線失敗: \(code)")
+            } else if isStreaming {
+                // 直播中斷線(或重連嘗試本身失敗)→ 進入/繼續重連流程
+                scheduleReconnect(reason: code)
+            }
+        }
+    }
+
+    // ── 斷線重連 ────────────────────────────────────────────
+
+    /// 直播中 RTMP 斷線時呼叫。以遞增間隔(2s→4s→…上限 10s)重試,
+    /// 最多 maxReconnectAttempts 次,全部失敗才放棄(streamLost)。
+    private func scheduleReconnect(reason: String) {
+        guard isStreaming else { return }
+        // 同一次斷線可能連續收到 Closed 和 Failed 兩個事件;
+        // 已有排程中的重連就不重複排,避免 attempt 灌水。
+        guard reconnectWorkItem == nil else { return }
+        // 清掉上一輪 attempt 留下的逾時保險(若有)
+        reconnectTimeoutItem?.cancel()
+        reconnectTimeoutItem = nil
+
+        reconnectAttempt += 1
+        guard reconnectAttempt <= maxReconnectAttempts else {
+            streamLost(reason)
+            return
+        }
+
+        isReconnecting = true
+        notifyConnectionState("reconnecting")
+        debug("RTMP 斷線(\(reason)),排程第 \(reconnectAttempt)/\(maxReconnectAttempts) 次重連…")
+
+        let delay = min(Double(reconnectAttempt) * 2.0, 10.0)
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.isStreaming, self.isReconnecting else { return }
+            self.reconnectWorkItem = nil
+            guard let url = self.lastUrl else { return }
+            self.debug("reconnect attempt \(self.reconnectAttempt): connecting")
+            self.rtmpConnection.connect(url)
+
+            // 單次嘗試的逾時保險:connect 卡死、15 秒內沒有任何
+            // status 事件時視同失敗,直接推進下一次重連。
+            let timeout = DispatchWorkItem { [weak self] in
+                guard let self, self.isStreaming, self.isReconnecting else { return }
+                self.debug("reconnect attempt timed out")
+                self.scheduleReconnect(reason: "timeout")
+            }
+            self.reconnectTimeoutItem = timeout
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: timeout)
+        }
+        reconnectWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    /// 重連次數用盡:收掉所有資源並通知 Flutter 直播已中斷。
+    private func streamLost(_ reason: String) {
+        debug("重連失敗,放棄: \(reason)")
+        cancelReconnectTimers()
+        isReconnecting = false
+        reconnectAttempt = 0
+        isStreaming = false  // didSet 會順便恢復螢幕自動鎖
+
+        // 先移除 listener 再 close,避免 close 觸發的 Closed 事件又進重連
+        rtmpConnection.removeEventListener(
+            .rtmpStatus,
+            selector: #selector(rtmpConnectHandler(_:)),
+            observer: self
+        )
+        rtmpStream?.removeEventListener(
+            .rtmpStatus,
+            selector: #selector(rtmpPublishHandler(_:)),
+            observer: self
+        )
+        rtmpStream?.close()
+        rtmpConnection.close()
+        lastUrl = nil
+        lastKey = nil
+
+        notifyConnectionState("lost")
+    }
+
+    private func cancelReconnectTimers() {
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        reconnectTimeoutItem?.cancel()
+        reconnectTimeoutItem = nil
+    }
+
+    private func notifyConnectionState(_ state: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.onConnectionState?(state)
         }
     }
 
@@ -402,6 +523,12 @@ class StreamingService: NSObject {
         isStarting = false
         isStreaming = false
         startToken = UUID()
+
+        cancelReconnectTimers()
+        isReconnecting = false
+        reconnectAttempt = 0
+        lastUrl = nil
+        lastKey = nil
 
         connectTimeoutItem?.cancel()
         connectTimeoutItem = nil

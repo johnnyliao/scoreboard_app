@@ -86,6 +86,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   bool _isStreaming = false;
   bool _isLoading = false;
   bool _showCamera = false;
+  bool _isReconnecting = false;
   String _loadingStatus = '';
   String _nativeDebugStatus = '';
 
@@ -128,13 +129,17 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   void initState() {
     super.initState();
     _streamChannel.setMethodCallHandler((call) async {
-      if (call.method != 'debugStatus') return;
-      final message = '${call.arguments ?? ''}';
-      if (!mounted) return;
-      setState(() {
-        _nativeDebugStatus = message;
-        _loadingStatus = message;
-      });
+      switch (call.method) {
+        case 'debugStatus':
+          final message = '${call.arguments ?? ''}';
+          if (!mounted) return;
+          setState(() {
+            _nativeDebugStatus = message;
+            _loadingStatus = message;
+          });
+        case 'connectionState':
+          _handleConnectionState('${call.arguments ?? ''}');
+      }
     });
     final now = DateTime.now();
     _titleCtrl = TextEditingController(
@@ -308,6 +313,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       setState(() {
         _isStreaming = false;
         _showCamera = false;
+        _isReconnecting = false;
         _watchUrl = null;
         _broadcastId = null;
         _streamStartTime = null;
@@ -316,6 +322,49 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       _showError('停止失敗: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  // ── 斷線重連狀態(來自 native) ──────────────────────────
+
+  void _handleConnectionState(String state) {
+    if (!mounted) return;
+    switch (state) {
+      case 'reconnecting':
+        // native 重試期間可能重複送 reconnecting,只在第一次提示
+        if (!_isReconnecting) {
+          setState(() => _isReconnecting = true);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('直播連線中斷，自動重連中…'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      case 'reconnected':
+        setState(() => _isReconnecting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('已重新連上，直播恢復'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        _syncScore(); // 立刻把最新比分/時鐘推回 overlay
+      case 'lost':
+        // 重連次數用盡:native 已收掉 RTMP,這裡同步 UI 並結束 YouTube broadcast
+        final bId = _broadcastId;
+        setState(() {
+          _isReconnecting = false;
+          _isStreaming = false;
+          _showCamera = false;
+          _watchUrl = null;
+          _broadcastId = null;
+          _streamStartTime = null;
+        });
+        if (bId != null) YouTubeService.stopBroadcast(bId);
+        _showError('直播連線中斷，多次重連失敗，已停止直播');
     }
   }
 
@@ -450,6 +499,11 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
         '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
 
     final chips = <Widget>[];
+
+    if (_isReconnecting) {
+      chips.add(_statusChip(Icons.wifi_off, '重連中…', Colors.orangeAccent));
+      chips.add(const SizedBox(width: 16));
+    }
 
     if (_isStreaming && _streamStartTime != null) {
       final elapsed = now.difference(_streamStartTime!);

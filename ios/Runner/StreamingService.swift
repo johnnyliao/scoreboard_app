@@ -182,7 +182,9 @@ class StreamingService: NSObject {
         // out at 15fps despite stream.frameRate = 30. Must be set before
         // startRunning() (startRunning copies it into the choreographer).
         stream.screen.frameRate = 30
-        stream.screen.startRunning()  // activates offscreen compositing for the VideoEffect
+        // NOTE: screen.startRunning() is deferred to startStream() — the
+        // offscreen compositor renders at 30fps and would drain battery while
+        // the app is idle. stopStream/failStart/streamLost call stopRunning().
         stream.registerVideoEffect(ScoreboardOverlayEffect(service: self))
 
         let preview = MTHKView(frame: .zero)
@@ -209,6 +211,15 @@ class StreamingService: NSObject {
         // attachCamera so it applies to the live capture connection.
         // (If the image comes out upside-down, switch to .landscapeLeft.)
         stream.videoOrientation = .landscapeRight
+    }
+
+    /// Turn the camera/mic capture session off once the stream ends, so the
+    /// green camera indicator goes away and the battery stops draining.
+    private func detachDevices() {
+        guard devicesAttached, let stream = rtmpStream else { return }
+        devicesAttached = false
+        stream.attachCamera(nil)
+        stream.attachAudio(nil)
     }
 
     func updateScore(
@@ -294,6 +305,9 @@ class StreamingService: NSObject {
                     guard self.isStarting && self.startToken == token else { return }
 
                     self.attachDevicesIfNeeded()
+                    // Offscreen compositing (needed by the score VideoEffect)
+                    // only runs while live; see setupStream.
+                    self.rtmpStream?.screen.startRunning()
                     self.pendingStreamKey = key
                     self.lastUrl = url
                     self.lastKey = key
@@ -357,11 +371,12 @@ class StreamingService: NSObject {
 
         rtmpStream?.close()
         rtmpConnection.close()
+        rtmpStream?.screen.stopRunning()
+        detachDevices()
 
         let completion = streamStartCompletion
         isStarting = false
         isStreaming = false
-        devicesAttached = false
         streamStartCompletion = nil
         pendingStreamKey = nil
 
@@ -485,6 +500,8 @@ class StreamingService: NSObject {
         )
         rtmpStream?.close()
         rtmpConnection.close()
+        rtmpStream?.screen.stopRunning()
+        detachDevices()
         lastUrl = nil
         lastKey = nil
 
@@ -548,6 +565,8 @@ class StreamingService: NSObject {
 
         rtmpStream?.close()
         rtmpConnection.close()
+        rtmpStream?.screen.stopRunning()
+        detachDevices()
 
         overlayLock.lock()
         celebrationStart = nil
@@ -654,13 +673,16 @@ class StreamingService: NSObject {
                                      ceil(awayScoreAttr.size().width)) + 36)
 
         let totalW = clockCellW + homeNameCellW + scoreCellW + scoreCellW + awayNameCellW
-        let barRect = CGRect(x: originX, y: originY, width: totalW, height: barH)
+        // Render ONLY the bar-sized image (not a full transparent 1920x1080
+        // canvas — that allocated ~8MB per redraw, once per second while the
+        // clock runs) and translate it into place as a CIImage afterwards.
+        let barRect = CGRect(x: 0, y: 0, width: totalW, height: barH)
         let barPath = UIBezierPath(roundedRect: barRect, cornerRadius: cornerRadius)
 
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1.0
         format.opaque = false
-        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        let renderer = UIGraphicsImageRenderer(size: barRect.size, format: format)
         let img = renderer.image { rc in
             let ctx = rc.cgContext
 
@@ -672,64 +694,72 @@ class StreamingService: NSObject {
             ctx.saveGState()
             barPath.addClip()
 
-            var x = originX
+            var x: CGFloat = 0
 
             // Clock cell (slight tint to distinguish)
-            let clockRect = CGRect(x: x, y: originY, width: clockCellW, height: barH)
+            let clockRect = CGRect(x: x, y: 0, width: clockCellW, height: barH)
             clockTint.setFill()
             ctx.fill(clockRect)
             self.drawCentered(clockAttr, in: clockRect)
             x += clockCellW
 
             // Home name + blue bottom accent
-            let homeNameRect = CGRect(x: x, y: originY, width: homeNameCellW, height: barH)
+            let homeNameRect = CGRect(x: x, y: 0, width: homeNameCellW, height: barH)
             self.drawCentered(homeNameAttr, in: homeNameRect)
             homeColor.setFill()
-            ctx.fill(CGRect(x: x, y: originY + barH - accentH,
+            ctx.fill(CGRect(x: x, y: barH - accentH,
                             width: homeNameCellW, height: accentH))
             x += homeNameCellW
 
             // Home score (blue cell, white bold)
-            let homeScoreRect = CGRect(x: x, y: originY, width: scoreCellW, height: barH)
+            let homeScoreRect = CGRect(x: x, y: 0, width: scoreCellW, height: barH)
             homeColor.setFill()
             ctx.fill(homeScoreRect)
             self.drawCentered(homeScoreAttr, in: homeScoreRect)
             x += scoreCellW
 
             // Away score (red cell, white bold)
-            let awayScoreRect = CGRect(x: x, y: originY, width: scoreCellW, height: barH)
+            let awayScoreRect = CGRect(x: x, y: 0, width: scoreCellW, height: barH)
             awayColor.setFill()
             ctx.fill(awayScoreRect)
             self.drawCentered(awayScoreAttr, in: awayScoreRect)
             x += scoreCellW
 
             // Away name + red bottom accent
-            let awayNameRect = CGRect(x: x, y: originY, width: awayNameCellW, height: barH)
+            let awayNameRect = CGRect(x: x, y: 0, width: awayNameCellW, height: barH)
             self.drawCentered(awayNameAttr, in: awayNameRect)
             awayColor.setFill()
-            ctx.fill(CGRect(x: x, y: originY + barH - accentH,
+            ctx.fill(CGRect(x: x, y: barH - accentH,
                             width: awayNameCellW, height: accentH))
 
             // Thin dividers at cell boundaries (over the colored cells too — subtle)
             divider.setFill()
             let boundaries: [CGFloat] = [
-                originX + clockCellW,
-                originX + clockCellW + homeNameCellW,
-                originX + clockCellW + homeNameCellW + scoreCellW,
-                originX + clockCellW + homeNameCellW + scoreCellW + scoreCellW,
+                clockCellW,
+                clockCellW + homeNameCellW,
+                clockCellW + homeNameCellW + scoreCellW,
+                clockCellW + homeNameCellW + scoreCellW + scoreCellW,
             ]
             for bx in boundaries {
-                ctx.fill(CGRect(x: bx - 0.5, y: originY, width: 1, height: barH))
+                ctx.fill(CGRect(x: bx - 0.5, y: 0, width: 1, height: barH))
             }
 
             ctx.restoreGState()
 
-            // Crisp outer border
+            // Crisp outer border (inset 0.5 so the 1pt stroke stays inside the image)
             border.setStroke()
-            barPath.lineWidth = 1
-            barPath.stroke()
+            let borderPath = UIBezierPath(
+                roundedRect: barRect.insetBy(dx: 0.5, dy: 0.5),
+                cornerRadius: cornerRadius)
+            borderPath.lineWidth = 1
+            borderPath.stroke()
         }
-        return CIImage(image: img)
+        guard let ci = CIImage(image: img) else { return nil }
+        // CIImage origin is bottom-left; place the bar at (originX, originY)
+        // from the frame's TOP-left, matching the previous full-canvas layout.
+        return ci.transformed(by: CGAffineTransform(
+            translationX: originX,
+            y: size.height - originY - barH))
     }
 
     private func drawCentered(_ attr: NSAttributedString, in rect: CGRect) {

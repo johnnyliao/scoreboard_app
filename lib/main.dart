@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'youtube_service.dart';
 
 const _streamChannel = MethodChannel('com.scoreboard/streaming');
@@ -103,10 +104,16 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
 
   // Match clock — wall-clock anchored so pause/resume never drifts.
   // _clockAccumMs holds time from completed runs; _clockRunStart marks the
-  // current run (null when paused). _matchTimer only drives the 1s refresh+sync.
+  // current run (null when paused). The shared 1s ticker (_onTick) drives
+  // the refresh + overlay sync while running.
   int _clockAccumMs = 0;
   DateTime? _clockRunStart;
-  Timer? _matchTimer;
+
+  // 狀態持久化 — App 被系統回收/當機後可恢復比分、隊名、隊色與時鐘。
+  SharedPreferences? _prefs;
+
+  // 狀態列時間只精確到分,閒置時每分鐘才需要 rebuild 一次。
+  int _lastShownMinute = -1;
 
   bool get _isClockRunning => _clockRunStart != null;
 
@@ -148,10 +155,22 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
     );
     _tryRestoreSignIn();
     _fetchBattery();
-    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() {});
-    });
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
     _batteryTimer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchBattery());
+    // 等第一個 frame 建好(有 Navigator)後再載入並詢問是否恢復上一場。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _initPrefs());
+  }
+
+  /// 共用的每秒 ticker:計時中/直播中需要秒級重繪(比賽時鐘、直播經過時間),
+  /// 閒置時只有狀態列的時間(分鐘)變了才 rebuild,其餘 tick 直接略過。
+  void _onTick() {
+    if (!mounted) return;
+    final minute = DateTime.now().minute;
+    final needsRebuild =
+        _isClockRunning || _isStreaming || minute != _lastShownMinute;
+    _lastShownMinute = minute;
+    if (needsRebuild) setState(() {});
+    if (_isClockRunning) _syncScore(); // 推最新時鐘到 YouTube overlay
   }
 
   Future<void> _fetchBattery() async {
@@ -166,12 +185,87 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
     if (mounted && account != null) setState(() => _account = account);
   }
 
+  // ── 狀態持久化 ─────────────────────────────────────────────
+
+  /// 隊名/隊色屬於球隊設定,直接套用;比分/時鐘屬於單場狀態,
+  /// 有殘留資料時先詢問「恢復上一場?」再決定套用或清除。
+  Future<void> _initPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    _prefs = prefs;
+    setState(() {
+      _homeName = prefs.getString('homeName') ?? _homeName;
+      _awayName = prefs.getString('awayName') ?? _awayName;
+      _homeColor = Color(prefs.getInt('homeColor') ?? _homeColor.value);
+      _awayColor = Color(prefs.getInt('awayColor') ?? _awayColor.value);
+    });
+
+    final homeScore = prefs.getInt('homeScore') ?? 0;
+    final awayScore = prefs.getInt('awayScore') ?? 0;
+    final clockAccumMs = prefs.getInt('clockAccumMs') ?? 0;
+    final clockRunStartMs = prefs.getInt('clockRunStartMs');
+    final hasMatch = homeScore > 0 ||
+        awayScore > 0 ||
+        clockAccumMs > 0 ||
+        clockRunStartMs != null;
+    if (!hasMatch) return;
+
+    final restore = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('恢復上一場比賽？'),
+        content: Text('上次的比分 $homeScore : $awayScore 與比賽時間尚未清除。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('開新比賽')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('恢復')),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (restore == true) {
+      setState(() {
+        _homeScore = homeScore;
+        _awayScore = awayScore;
+        _clockAccumMs = clockAccumMs;
+        // 時鐘原本在跑:用存下的錨點恢復,經過的時間會自動補上。
+        _clockRunStart = clockRunStartMs != null
+            ? DateTime.fromMillisecondsSinceEpoch(clockRunStartMs)
+            : null;
+      });
+    } else {
+      _saveState(); // 以目前(歸零)狀態覆蓋掉殘留的上一場
+    }
+  }
+
+  /// 寫入目前狀態;每次比分/隊名/隊色/時鐘變動後呼叫(fire-and-forget)。
+  void _saveState() {
+    final prefs = _prefs;
+    if (prefs == null) return;
+    prefs.setString('homeName', _homeName);
+    prefs.setString('awayName', _awayName);
+    prefs.setInt('homeColor', _homeColor.value);
+    prefs.setInt('awayColor', _awayColor.value);
+    prefs.setInt('homeScore', _homeScore);
+    prefs.setInt('awayScore', _awayScore);
+    prefs.setInt('clockAccumMs', _clockAccumMs);
+    final runStart = _clockRunStart;
+    if (runStart == null) {
+      prefs.remove('clockRunStartMs');
+    } else {
+      prefs.setInt('clockRunStartMs', runStart.millisecondsSinceEpoch);
+    }
+  }
+
   @override
   void dispose() {
     _streamChannel.setMethodCallHandler(null);
     _clockTimer?.cancel();
     _batteryTimer?.cancel();
-    _matchTimer?.cancel();
     _titleCtrl.dispose();
     super.dispose();
   }
@@ -197,14 +291,9 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
   void _startClock() {
     if (_isClockRunning) return;
     _clockRunStart = DateTime.now();
-    _matchTimer?.cancel();
-    _matchTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      setState(() {}); // refresh in-app clock display
-      _syncScore();    // push new clock to the YouTube overlay
-    });
     setState(() {});
     _syncScore();
+    _saveState();
   }
 
   void _pauseClock() {
@@ -212,22 +301,20 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
     _clockAccumMs +=
         DateTime.now().difference(_clockRunStart!).inMilliseconds;
     _clockRunStart = null;
-    _matchTimer?.cancel();
-    _matchTimer = null;
     setState(() {});
     _syncScore();
+    _saveState();
   }
 
   void _toggleClock() => _isClockRunning ? _pauseClock() : _startClock();
 
   void _resetClock() {
-    _matchTimer?.cancel();
-    _matchTimer = null;
     setState(() {
       _clockAccumMs = 0;
       _clockRunStart = null;
     });
     _syncScore();
+    _saveState();
   }
 
   // ── Sign in / out ──────────────────────────────────────────
@@ -301,6 +388,31 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
       }
       if (mounted) setState(() { _isLoading = false; _loadingStatus = ''; });
     }
+  }
+
+  /// 停止直播是不可逆的(broadcast 轉 complete 後無法續播),
+  /// 按鈕又在畫面邊緣容易誤觸,所以先確認再執行。
+  void _confirmStopStream() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('停止直播'),
+        content: const Text('確定要結束直播？結束後無法繼續本場直播。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消')),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _stopStream();
+            },
+            child: const Text('停止直播',
+                style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _stopStream() async {
@@ -412,6 +524,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
     });
     Navigator.pop(ctx);
     _syncScore();
+    _saveState();
   }
 
   // ── Team color ─────────────────────────────────────────────
@@ -436,6 +549,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
             }
           });
           _syncScore();
+          _saveState();
         },
       ),
     );
@@ -482,6 +596,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
               });
               Navigator.pop(ctx);
               _syncScore();
+              _saveState();
             },
             child: const Text('重置',
                 style: TextStyle(color: Colors.red)),
@@ -582,7 +697,7 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                   onStart: _account != null && !_isStreaming
                       ? _startStream
                       : null,
-                  onStop: _isStreaming ? _stopStream : null,
+                  onStop: _isStreaming ? _confirmStopStream : null,
                 ),
                 Expanded(
                   child: Row(
@@ -595,12 +710,14 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                           onAdd: () {
                             setState(() => _homeScore++);
                             _syncScore();
+                            _saveState();
                           },
                           onSubtract: () {
                             setState(() {
                               if (_homeScore > 0) _homeScore--;
                             });
                             _syncScore();
+                            _saveState();
                           },
                           onEditName: () => _editName(true),
                           onEditColor: () => _editColor(true),
@@ -623,12 +740,14 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
                           onAdd: () {
                             setState(() => _awayScore++);
                             _syncScore();
+                            _saveState();
                           },
                           onSubtract: () {
                             setState(() {
                               if (_awayScore > 0) _awayScore--;
                             });
                             _syncScore();
+                            _saveState();
                           },
                           onEditName: () => _editName(false),
                           onEditColor: () => _editColor(false),

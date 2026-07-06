@@ -7,7 +7,10 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # 釘在 macos-15:GitHub 於 2026-06-15 起將 macos-latest 遷移到 macOS 26
+    # (Xcode 26),導致原本可過的 build 開始失敗。與 Flutter 釘 3.32.1 同理,
+    # 工具鏈版本應明確固定,要升級時另開 commit 驗證。
+    runs-on: macos-15
     permissions:
       contents: write
 
@@ -32,8 +35,24 @@ jobs:
           cd ios
           pod install --repo-update
 
+      # 完整輸出留存到 build.log:flutter 平常會吞掉 xcodebuild 的錯誤細節,
+      # 失敗時只印 "Command SwiftCompile failed",根本無從查起。
       - name: Build iOS (no codesign)
-        run: flutter build ios --release --no-codesign
+        run: |
+          set -o pipefail
+          flutter build ios --release --no-codesign --verbose 2>&1 | tee build.log
+
+      - name: Show compile errors
+        if: failure()
+        run: grep -nE "error:" -B 2 -A 5 build.log | head -300 || tail -100 build.log
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7
 
       - name: Package IPA
         run: |

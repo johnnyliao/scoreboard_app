@@ -464,19 +464,6 @@ class _ScoreboardPageState extends State<ScoreboardPage> {
           ),
         );
         _syncScore(); // 立刻把最新比分/時鐘推回 overlay
-      case 'lost':
-        // 重連次數用盡:native 已收掉 RTMP,這裡同步 UI 並結束 YouTube broadcast
-        final bId = _broadcastId;
-        setState(() {
-          _isReconnecting = false;
-          _isStreaming = false;
-          _showCamera = false;
-          _watchUrl = null;
-          _broadcastId = null;
-          _streamStartTime = null;
-        });
-        if (bId != null) YouTubeService.stopBroadcast(bId);
-        _showError('直播連線中斷，多次重連失敗，已停止直播');
     }
   }
 

@@ -10,6 +10,9 @@ final class ScoreboardOverlayEffect: VideoEffect {
     private weak var service: StreamingService?
     private let compositeFilter = CIFilter(name: "CISourceOverCompositing")!
     private let celebFilter = CIFilter(name: "CISourceOverCompositing")!
+    // 慶祝動畫每兩幀重畫一次,其餘幀重用上一張,減半 CPU 負擔。
+    private var lastCelebrationOverlay: CIImage?
+    private var celebrationFrameCount = 0
 
     init(service: StreamingService) {
         self.service = service
@@ -48,19 +51,30 @@ final class ScoreboardOverlayEffect: VideoEffect {
                     service.celebrationName = nil
                 }
                 service.overlayLock.unlock()
-            } else if let celOverlay = service.makeCelebrationOverlay(
-                elapsed: elapsed,
-                particles: celParticles,
-                name: celName,
-                frameW: frameW,
-                frameH: frameH
-            ) {
-                celebFilter.setValue(celOverlay, forKey: kCIInputImageKey)
-                celebFilter.setValue(current, forKey: kCIInputBackgroundImageKey)
-                if let out = celebFilter.outputImage {
-                    current = out
+                lastCelebrationOverlay = nil
+                celebrationFrameCount = 0
+            } else {
+                celebrationFrameCount += 1
+                if celebrationFrameCount % 2 == 1 || lastCelebrationOverlay == nil {
+                    lastCelebrationOverlay = service.makeCelebrationOverlay(
+                        elapsed: elapsed,
+                        particles: celParticles,
+                        name: celName,
+                        frameW: frameW,
+                        frameH: frameH
+                    )
+                }
+                if let celOverlay = lastCelebrationOverlay {
+                    celebFilter.setValue(celOverlay, forKey: kCIInputImageKey)
+                    celebFilter.setValue(current, forKey: kCIInputBackgroundImageKey)
+                    if let out = celebFilter.outputImage {
+                        current = out
+                    }
                 }
             }
+        } else {
+            lastCelebrationOverlay = nil
+            celebrationFrameCount = 0
         }
 
         return current
@@ -77,6 +91,8 @@ class StreamingService: NSObject {
 
     fileprivate let overlayLock = NSLock()
     fileprivate var cachedOverlay: CIImage?
+    /// 比分圖重畫在這個序列 queue 進行,避免佔用主執行緒(offscreen 合成的 execute 也在主執行緒)。
+    private let overlayRenderQueue = DispatchQueue(label: "com.scoreboard.overlay", qos: .userInitiated)
 
     fileprivate var celebrationStart: Date?
     fileprivate let celebrationDuration: TimeInterval = 3.0
@@ -112,13 +128,12 @@ class StreamingService: NSObject {
 
     // ── 斷線重連 ──
     // 直播中 RTMP 斷線時,用同一組 url/key 自動重連並重新 publish。
-    // onConnectionState 通知 Flutter: "reconnecting" / "reconnected" / "lost"。
+    // onConnectionState 通知 Flutter: "reconnecting" / "reconnected"。
     var onConnectionState: ((String) -> Void)?
     private var lastUrl: String?
     private var lastKey: String?
     private var isReconnecting = false
     private var reconnectAttempt = 0
-    private let maxReconnectAttempts = 5
     private var reconnectWorkItem: DispatchWorkItem?
     private var reconnectTimeoutItem: DispatchWorkItem?
 
@@ -169,6 +184,8 @@ class StreamingService: NSObject {
         videoSettings.bitRate = 4_500_000
         videoSettings.maxKeyFrameIntervalDuration = 2
         stream.videoSettings = videoSettings
+        // 預設的 bitrateStrategy 不做任何事;這個會在上傳跟不上時自動降低位元率。
+        stream.bitrateStrategy = IOStreamVideoAdaptiveBitRateStrategy(mamimumVideoBitrate: 4_500_000)
 
         var audioSettings = AudioCodecSettings()
         audioSettings.bitRate = 128 * 1000
@@ -184,7 +201,7 @@ class StreamingService: NSObject {
         stream.screen.frameRate = 30
         // NOTE: screen.startRunning() is deferred to startStream() — the
         // offscreen compositor renders at 30fps and would drain battery while
-        // the app is idle. stopStream/failStart/streamLost call stopRunning().
+        // the app is idle. stopStream/failStart call stopRunning().
         stream.registerVideoEffect(ScoreboardOverlayEffect(service: self))
 
         let preview = MTHKView(frame: .zero)
@@ -236,19 +253,22 @@ class StreamingService: NSObject {
         let homeColor = homeColorARGB.map(Self.colorFromARGB) ?? UIColor(red: 0xF5/255.0, green: 0x7C/255.0, blue: 0x00/255.0, alpha: 1)
         let awayColor = awayColorARGB.map(Self.colorFromARGB) ?? UIColor(red: 0xFD/255.0, green: 0xD8/255.0, blue: 0x35/255.0, alpha: 1)
         let size = CGSize(width: 1920, height: 1080)
-        let overlay = makeScoreOverlay(
-            homeName: homeName,
-            homeScore: homeScore,
-            awayName: awayName,
-            awayScore: awayScore,
-            clock: clock,
-            homeColor: homeColor,
-            awayColor: awayColor,
-            size: size
-        )
-        overlayLock.lock()
-        cachedOverlay = overlay
-        overlayLock.unlock()
+        overlayRenderQueue.async { [weak self] in
+            guard let self else { return }
+            let overlay = self.makeScoreOverlay(
+                homeName: homeName,
+                homeScore: homeScore,
+                awayName: awayName,
+                awayScore: awayScore,
+                clock: clock,
+                homeColor: homeColor,
+                awayColor: awayColor,
+                size: size
+            )
+            self.overlayLock.lock()
+            self.cachedOverlay = overlay
+            self.overlayLock.unlock()
+        }
     }
 
     /// Flutter `Color.value` is 32-bit ARGB. Convert to UIColor.
@@ -437,7 +457,7 @@ class StreamingService: NSObject {
     // ── 斷線重連 ────────────────────────────────────────────
 
     /// 直播中 RTMP 斷線時呼叫。以遞增間隔(2s→4s→…上限 10s)重試,
-    /// 最多 maxReconnectAttempts 次,全部失敗才放棄(streamLost)。
+    /// 持續重試直到使用者按停止(stopStream 會取消所有計時器)。
     private func scheduleReconnect(reason: String) {
         guard isStreaming else { return }
         // 同一次斷線可能連續收到 Closed 和 Failed 兩個事件;
@@ -448,14 +468,10 @@ class StreamingService: NSObject {
         reconnectTimeoutItem = nil
 
         reconnectAttempt += 1
-        guard reconnectAttempt <= maxReconnectAttempts else {
-            streamLost(reason)
-            return
-        }
 
         isReconnecting = true
         notifyConnectionState("reconnecting")
-        debug("RTMP 斷線(\(reason)),排程第 \(reconnectAttempt)/\(maxReconnectAttempts) 次重連…")
+        debug("RTMP 斷線(\(reason)),排程第 \(reconnectAttempt) 次重連…")
 
         let delay = min(Double(reconnectAttempt) * 2.0, 10.0)
         let item = DispatchWorkItem { [weak self] in
@@ -477,35 +493,6 @@ class StreamingService: NSObject {
         }
         reconnectWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
-    }
-
-    /// 重連次數用盡:收掉所有資源並通知 Flutter 直播已中斷。
-    private func streamLost(_ reason: String) {
-        debug("重連失敗,放棄: \(reason)")
-        cancelReconnectTimers()
-        isReconnecting = false
-        reconnectAttempt = 0
-        isStreaming = false  // didSet 會順便恢復螢幕自動鎖
-
-        // 先移除 listener 再 close,避免 close 觸發的 Closed 事件又進重連
-        rtmpConnection.removeEventListener(
-            .rtmpStatus,
-            selector: #selector(rtmpConnectHandler(_:)),
-            observer: self
-        )
-        rtmpStream?.removeEventListener(
-            .rtmpStatus,
-            selector: #selector(rtmpPublishHandler(_:)),
-            observer: self
-        )
-        rtmpStream?.close()
-        rtmpConnection.close()
-        rtmpStream?.screen.stopRunning()
-        detachDevices()
-        lastUrl = nil
-        lastKey = nil
-
-        notifyConnectionState("lost")
     }
 
     private func cancelReconnectTimers() {
